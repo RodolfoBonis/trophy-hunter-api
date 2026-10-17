@@ -12,6 +12,7 @@ import (
 	trophyhunter "github.com/RodolfoBonis/trophy-hunter-api"
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
 	migrations "github.com/RodolfoBonis/trophy-hunter-api/db/migrations"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/api"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/psn"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steam"
@@ -21,6 +22,7 @@ import (
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/db"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/httpserver"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
+	redisplat "github.com/RodolfoBonis/trophy-hunter-api/internal/platform/redis"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/telemetry"
 	syncpkg "github.com/RodolfoBonis/trophy-hunter-api/internal/sync"
 )
@@ -86,8 +88,20 @@ func run() error {
 		PSN: psn.New(psn.Options{AuthBaseURL: cfg.PSN.AuthBaseURL, APIBaseURL: cfg.PSN.APIBaseURL, Lang: cfg.PSN.Lang, RPS: cfg.PSN.RPS, Burst: cfg.PSN.Burst, Logger: logger}),
 	})
 
+	// Redis: canal da resposta da IA em tempo real (SSE). Sem ele, a API sobe com a IA desligada.
+	var aiSvc *ai.Service
+	rdb, rerr := redisplat.New(ctx, cfg.Redis)
+	if rerr != nil {
+		logger.Warn("redis indisponível; IA desligada", slog.String("err", rerr.Error()))
+		rdb = nil
+	} else {
+		defer func() { _ = rdb.Close() }()
+		aiSvc = ai.New(ai.Deps{Queries: queries, Queue: jobs, Redis: rdb, Logger: logger})
+	}
+
 	handlers := api.NewHandlers(api.HandlerDeps{
 		Queries: queries, Pool: pool, Syncer: syncer, Logger: logger,
+		AI: aiSvc, Redis: rdb,
 		AuthReady: authenticator.Ready,
 	})
 	router := api.NewRouter(api.RouterDeps{

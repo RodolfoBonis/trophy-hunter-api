@@ -1,10 +1,13 @@
 # Trophy Hunter API
 
-Backend pessoal (single-user) para acompanhar conquistas **Steam** (troféus PSN chegam na fase 2).
-Mostra a biblioteca, o progresso por jogo e o que falta para 100%. Go 1.26 · chi · pgx/sqlc · goose.
+Backend pessoal (single-user) para acompanhar conquistas **Steam** e troféus **PSN**: biblioteca,
+progresso por jogo, o que falta para platina/100% e guias de IA. Go 1.26 · chi · pgx/sqlc · goose.
 
-- **`cmd/api`** — API REST (`/api/v1`), valida o JWT do Keycloak (realm `platform`) e enfileira syncs.
-- **`cmd/worker`** — processa a fila (Postgres) e agenda syncs incrementais; expõe `/metrics` e `/healthz`.
+- **`cmd/api`** — API REST (`/api/v1`), valida o JWT do Keycloak (realm `platform`) e enfileira syncs e
+  pedidos de IA; repassa a resposta da IA por SSE.
+- **`cmd/worker`** — processa os jobs de sync (Postgres) e agenda syncs incrementais; expõe `/metrics`.
+- **`cmd/ai-worker`** — gera guias por troféu, roadmaps e respostas do chat com a CLI do Claude Code
+  headless (imagem própria, `Dockerfile.ai-worker`).
 
 O contrato vive em [`api/openapi.yaml`](api/openapi.yaml) (OpenAPI 3.1) — o frontend gera tipos dele.
 
@@ -118,6 +121,23 @@ curl -X POST localhost:8080/api/v1/games/<game-id>/sync -H 'X-Debug-User: me'
 curl -H 'X-Debug-User: me' 'localhost:8080/api/v1/sync-runs?platform=steam'
 ```
 
+## Guias e chat com IA
+
+O `ai-worker` roda `claude -p --output-format stream-json` (Claude Code headless, mesma assinatura do
+Jarvis) com o prompt por stdin, ambiente mínimo e só `WebSearch,WebFetch` liberados. Fluxo:
+
+1. `POST /trophies/{id}/guide`, `POST /games/{id}/roadmap` ou `POST /games/{id}/chat` grava o pedido e
+   enfileira um job `ai_guide`/`ai_chat` (202).
+2. O ai-worker executa a CLI e publica os pedaços da resposta numa Redis Stream (`ai:stream:<id>`,
+   expira em 1 h); guias usam `--json-schema` e são revalidados em Go antes de gravar.
+3. O browser acompanha `GET /ai/streams/{id}` (SSE com heartbeat de 5 s, retomável por
+   `Last-Event-ID`); o resultado definitivo fica no Postgres.
+
+Guias e conversas são do **jogo** (valem para todas as contas). O chat usa `--resume` da sessão da CLI;
+se a sessão sumir (pod recriado), recomeça com o histórico recente no prompt. Limite de uso da
+assinatura → o job é reagendado com backoff. Para rodar local: `CLAUDE_CODE_OAUTH_TOKEN=… go run
+./cmd/ai-worker` (precisa do `claude` no PATH e do Redis).
+
 ## Rotação da chave de criptografia
 
 As credenciais de integração são cifradas com `TOKEN_ENC_KEY` (AES-256-GCM), e o `key_version`
@@ -151,7 +171,8 @@ Todas documentadas em [`.env.example`](.env.example). Resumo dos principais grup
 auth (`AUTH_MODE` — `oidc` default / `dev` só em dev, `AUTH_ISSUER`, `AUTH_AUDIENCE`,
 `AUTH_REQUIRED_ROLE`), cripto (`TOKEN_ENC_KEY` base64 de 32 bytes, `TOKEN_ENC_KEY_VERSION`,
 `TOKEN_ENC_KEYS_OLD` p/ rotação), sync (`SYNC_ENABLED`, `SYNC_INTERVAL`, `JOB_TIMEOUT`,
-`WORKER_CONCURRENCY`), Steam (`STEAM_API_BASE_URL`, `STEAM_LANG`, `STEAM_RPS` default 4) e telemetria
+`WORKER_CONCURRENCY`), Steam (`STEAM_API_BASE_URL`, `STEAM_LANG`, `STEAM_RPS` default 4), IA
+(`CLAUDE_CODE_OAUTH_TOKEN`, `AI_MODEL`, `AI_JOB_TIMEOUT`, `AI_HOME`, `AI_WORKDIR`) e telemetria
 (`OTEL_ENABLED`, `OTEL_SERVICE_NAME`, `LOG_LEVEL`).
 
 > Segurança: segredos nunca são logados (redação por `ReplaceAttr` em chaves `npsso|token|secret|key|

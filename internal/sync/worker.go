@@ -78,7 +78,7 @@ func (w *Worker) loop(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		job, err := w.queue.Claim(ctx, defaultLease)
+		job, err := w.queue.Claim(ctx, defaultLease, KindSyncPlatform, KindSyncGame)
 		if err != nil {
 			w.logger.Error("claim falhou", slog.String("err", err.Error()))
 			if !sleepCtx(ctx, emptyPollDelay) {

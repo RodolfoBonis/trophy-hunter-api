@@ -43,6 +43,12 @@ var (
 		Help: "Jobs processados pela fila, por kind e resultado.",
 	}, []string{"kind", "result"})
 
+	// aiJobs conta execuções da IA por tipo (trophy|roadmap|chat) e resultado (ok|error|rate_limited).
+	aiJobs = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "ai_jobs_total",
+		Help: "Execuções da IA (guias e chat), por tipo e resultado.",
+	}, []string{"kind", "result"})
+
 	// integrationStatus expõe, por plataforma e status, 1 para o status atual e 0 para os demais.
 	// Registrado SÓ no worker (ver EnableIntegrationStatus).
 	integrationStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -60,7 +66,7 @@ func init() {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
-	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed)
+	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed, aiJobs)
 }
 
 // EnableIntegrationStatus registra e habilita o gauge integration_status. Chamado SÓ pelo worker.
@@ -84,6 +90,11 @@ func SyncRun(scope, status string) {
 // JobProcessed registra o resultado do processamento de um job.
 func JobProcessed(kind, result string) {
 	jobsProcessed.WithLabelValues(kind, result).Inc()
+}
+
+// AIJob registra uma execução da IA.
+func AIJob(kind, result string) {
+	aiJobs.WithLabelValues(kind, result).Inc()
 }
 
 // SetIntegrationStatus marca o status atual de uma integração (zera os demais status da plataforma).

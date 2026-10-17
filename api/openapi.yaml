@@ -20,6 +20,11 @@ tags:
   - name: integrations
   - name: games
   - name: sync
+  - name: ai
+    description: >
+      Guias por troféu, roadmap de platina e chat por jogo, gerados por IA (Claude Code headless no
+      ai-worker). Gerar é assíncrono — o POST devolve 202 e a resposta chega em tempo real por
+      GET /ai/streams/{id} (SSE). Guias e conversas valem para o JOGO (todas as contas).
 paths:
   /me:
     get:
@@ -456,6 +461,181 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
 
+  /trophies/{id}/guide:
+    get:
+      tags: [ai]
+      operationId: getTrophyGuide
+      summary: Guia de IA do troféu (null se ainda não gerado).
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIGuideEnvelope" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [ai]
+      operationId: generateTrophyGuide
+      summary: Gera (ou regenera) o guia do troféu. A edição do usuário é preservada.
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      responses:
+        "202":
+          description: Na fila — acompanhe em /ai/streams/{guide.id}.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIGuide" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /games/{id}/roadmap:
+    get:
+      tags: [ai]
+      operationId: getRoadmap
+      summary: Roadmap de platina/100% do jogo (null se ainda não gerado).
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIGuideEnvelope" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [ai]
+      operationId: generateRoadmap
+      summary: Gera (ou regenera) o roadmap a partir do progresso atual.
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      responses:
+        "202":
+          description: Na fila — acompanhe em /ai/streams/{guide.id}.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIGuide" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /ai/guides/{id}:
+    patch:
+      tags: [ai]
+      operationId: editGuide
+      summary: Grava a correção do usuário (mesmo schema do guia) ou null para voltar ao gerado.
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [edited_content]
+              properties:
+                edited_content:
+                  oneOf:
+                    - { $ref: "#/components/schemas/TrophyGuideContent" }
+                    - { $ref: "#/components/schemas/RoadmapContent" }
+                    - { type: "null" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIGuide" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /games/{id}/chat:
+    get:
+      tags: [ai]
+      operationId: getChat
+      summary: Conversa ativa do jogo.
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatThread" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [ai]
+      operationId: sendChat
+      summary: Envia uma pergunta; a resposta chega por /ai/streams/{assistant.id}. Uma por vez.
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string, maxLength: 4000 }
+      responses:
+        "202":
+          description: Na fila.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user, assistant]
+                properties:
+                  user: { $ref: "#/components/schemas/ChatMessage" }
+                  assistant: { $ref: "#/components/schemas/ChatMessage" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [ai]
+      operationId: resetChat
+      summary: Arquiva a conversa (a próxima pergunta começa do zero).
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      responses:
+        "204": { description: Arquivada }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /ai/streams/{id}:
+    get:
+      tags: [ai]
+      operationId: aiStream
+      summary: Resposta da IA em tempo real (Server-Sent Events).
+      description: >
+        id = guia ou mensagem do assistente. Eventos (data = JSON {"data": string}): `text` (pedaço
+        do chat), `json` (pedaço do JSON do guia), `tool` ("Pesquisando: …"), `status` (aviso),
+        `ping` (heartbeat a cada 5 s) e os finais `done` (resultado no GET correspondente) e
+        `error` (mensagem). Retoma do header Last-Event-ID. Use fetch (o header Authorization não
+        cabe em EventSource).
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+        - name: Last-Event-ID
+          in: header
+          schema: { type: string }
+      responses:
+        "200":
+          description: Stream SSE.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -480,6 +660,96 @@ components:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
   schemas:
+    AIGuideEnvelope:
+      type: object
+      required: [guide]
+      properties:
+        guide:
+          oneOf:
+            - { $ref: "#/components/schemas/AIGuide" }
+            - { type: "null" }
+    AIGuide:
+      type: object
+      description: >
+        Guia de IA. content = gerado (validado pelo schema do escopo); edited_content = correção do
+        usuário (a UI mostra a editada quando existe). status pending/running = gerando.
+      required: [id, scope, status, content, edited_content, model, error, generated_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        scope: { type: string, enum: [trophy, roadmap] }
+        status: { type: string, enum: [pending, running, ready, error] }
+        content:
+          description: TrophyGuideContent (scope trophy) ou RoadmapContent (scope roadmap).
+          oneOf:
+            - { $ref: "#/components/schemas/TrophyGuideContent" }
+            - { $ref: "#/components/schemas/RoadmapContent" }
+            - { type: "null" }
+        edited_content:
+          oneOf:
+            - { $ref: "#/components/schemas/TrophyGuideContent" }
+            - { $ref: "#/components/schemas/RoadmapContent" }
+            - { type: "null" }
+        model: { type: string }
+        error: { type: string, description: "Mensagem exibível quando status = error." }
+        generated_at: { type: [string, "null"], format: date-time }
+        updated_at: { type: [string, "null"], format: date-time }
+    TrophyGuideContent:
+      type: object
+      additionalProperties: false
+      required: [summary, steps, prerequisites, missable, point_of_no_return, difficulty, estimated_time, tips, confidence, uncertainty_notes, sources]
+      properties:
+        summary: { type: string }
+        steps: { type: array, minItems: 1, items: { type: string } }
+        prerequisites: { type: array, items: { type: string } }
+        missable: { type: boolean }
+        point_of_no_return: { type: string }
+        difficulty: { type: integer, minimum: 1, maximum: 10 }
+        estimated_time: { type: string }
+        tips: { type: array, items: { type: string } }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        uncertainty_notes: { type: string }
+        sources: { type: array, items: { type: string } }
+    RoadmapStage:
+      type: object
+      additionalProperties: false
+      required: [title, description, trophies, missables]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        trophies: { type: array, items: { type: string } }
+        missables: { type: array, items: { type: string } }
+    RoadmapContent:
+      type: object
+      additionalProperties: false
+      required: [summary, difficulty, estimated_total_time, playthroughs, stages, missables_overview, tips, confidence, uncertainty_notes, sources]
+      properties:
+        summary: { type: string }
+        difficulty: { type: integer, minimum: 1, maximum: 10 }
+        estimated_total_time: { type: string }
+        playthroughs: { type: integer, minimum: 1 }
+        stages: { type: array, minItems: 1, items: { $ref: "#/components/schemas/RoadmapStage" } }
+        missables_overview: { type: array, items: { type: string } }
+        tips: { type: array, items: { type: string } }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        uncertainty_notes: { type: string }
+        sources: { type: array, items: { type: string } }
+    ChatMessage:
+      type: object
+      required: [id, role, content, status, error, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        role: { type: string, enum: [user, assistant] }
+        content: { type: string }
+        status: { type: string, enum: [pending, running, done, error] }
+        error: { type: string }
+        created_at: { type: [string, "null"], format: date-time }
+    ChatThread:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/ChatMessage" }
     Platform:
       type: string
       enum: [steam, psn]

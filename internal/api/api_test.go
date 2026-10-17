@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/api"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steam"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/auth"
@@ -61,6 +62,7 @@ type testEnv struct {
 	q     *dbgen.Queries
 	queue queue.Queue
 	sync  *syncpkg.Syncer
+	ai    *ai.Service
 }
 
 func setup(t *testing.T) *testEnv {
@@ -74,6 +76,13 @@ func setupWith(t *testing.T, factory syncpkg.SteamFactory) *testEnv {
 }
 
 func setupFull(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI) *testEnv {
+	t.Helper()
+	return build(t, factory, psnAPI, nil)
+}
+
+// build monta o ambiente; com runner != nil liga a IA (Redis efêmero + serviço de IA com o runner
+// fake, que o teste executa via drainAI).
+func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, runner ai.Runner) *testEnv {
 	t.Helper()
 	pool := testsupport.NewPostgres(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -94,11 +103,18 @@ func setupFull(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI
 
 	authn := auth.New(context.Background(), config.Auth{Mode: config.AuthModeDev, RequiredRole: "trophy-hunter-user"}, logger)
 
-	handlers := api.NewHandlers(api.HandlerDeps{Queries: q, Pool: pool, Syncer: syncer, Logger: logger})
+	deps := api.HandlerDeps{Queries: q, Pool: pool, Syncer: syncer, Logger: logger}
+	var aiSvc *ai.Service
+	if runner != nil {
+		rdb := testsupport.NewRedis(t)
+		aiSvc = ai.New(ai.Deps{Queries: q, Queue: jobs, Redis: rdb, Runner: runner, Workdir: t.TempDir(), Logger: logger})
+		deps.AI, deps.Redis = aiSvc, rdb
+	}
+	handlers := api.NewHandlers(deps)
 	router := api.NewRouter(api.RouterDeps{Handlers: handlers, Auth: authn, Logger: logger, ServiceName: "test"})
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
-	return &testEnv{srv: srv, q: q, queue: jobs, sync: syncer}
+	return &testEnv{srv: srv, q: q, queue: jobs, sync: syncer, ai: aiSvc}
 }
 
 func (e *testEnv) do(t *testing.T, method, path, body string, auth bool) *http.Response {
@@ -125,7 +141,7 @@ func (e *testEnv) drain(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
 	for i := 0; i < 100; i++ {
-		job, err := e.queue.Claim(ctx, time.Minute)
+		job, err := e.queue.Claim(ctx, time.Minute, syncpkg.KindSyncPlatform, syncpkg.KindSyncGame)
 		require.NoError(t, err)
 		if job == nil {
 			return

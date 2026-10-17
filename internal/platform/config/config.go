@@ -38,6 +38,7 @@ type Config struct {
 	Sync              Sync
 	Steam             Steam
 	PSN               PSN
+	AI                AI
 	WorkerConcurrency int `env:"WORKER_CONCURRENCY" envDefault:"4"`
 }
 
@@ -93,7 +94,7 @@ type Auth struct {
 // OldKeysB64 traz chaves antigas (rotação) no formato "version:base64,version:base64" — usadas
 // SÓ para decifrar blobs ainda cifrados com elas; a cifragem nova usa sempre a chave primária.
 type Crypto struct {
-	KeyB64     string `env:"TOKEN_ENC_KEY,required"`
+	KeyB64     string `env:"TOKEN_ENC_KEY"`
 	KeyVersion int    `env:"TOKEN_ENC_KEY_VERSION" envDefault:"1"`
 	OldKeysB64 string `env:"TOKEN_ENC_KEYS_OLD" envDefault:""`
 	Key        []byte `env:"-"`
@@ -144,14 +145,34 @@ type Steam struct {
 	RPS     float64 `env:"STEAM_RPS" envDefault:"4"`
 }
 
+// Option ajusta o carregamento.
+type Option func(*loadOptions)
+
+type loadOptions struct{ withoutCrypto bool }
+
+// WithoutCrypto dispensa a TOKEN_ENC_KEY: o ai-worker não toca nas credenciais das integrações, então
+// não recebe a chave (menor privilégio). API e worker exigem a chave.
+func WithoutCrypto() Option { return func(o *loadOptions) { o.withoutCrypto = true } }
+
 // Load lê a configuração do ambiente, valida campos obrigatórios e decodifica a chave mestra.
-func Load() (Config, error) {
+func Load(opts ...Option) (Config, error) {
+	var o loadOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	var cfg Config
 	if err := env.Parse(&cfg); err != nil {
 		return Config{}, fmt.Errorf("carregar config: %w", err)
 	}
 	if err := validateAuth(cfg); err != nil {
 		return Config{}, err
+	}
+	if o.withoutCrypto {
+		cfg.Crypto = Crypto{}
+		return cfg, validateLimits(cfg)
+	}
+	if cfg.Crypto.KeyB64 == "" {
+		return Config{}, fmt.Errorf("carregar config: TOKEN_ENC_KEY é obrigatória")
 	}
 	key, err := base64.StdEncoding.DecodeString(cfg.Crypto.KeyB64)
 	if err != nil {
@@ -169,17 +190,21 @@ func Load() (Config, error) {
 	}
 	cfg.Crypto.OldKeys = oldKeys
 	cfg.Crypto.OldKeysB64 = ""
+	return cfg, validateLimits(cfg)
+}
 
+// validateLimits confere os limites numéricos da config.
+func validateLimits(cfg Config) error {
 	if cfg.Steam.RPS <= 0 {
-		return Config{}, fmt.Errorf("carregar config: STEAM_RPS deve ser > 0")
+		return fmt.Errorf("carregar config: STEAM_RPS deve ser > 0")
 	}
 	if cfg.WorkerConcurrency <= 0 {
-		return Config{}, fmt.Errorf("carregar config: WORKER_CONCURRENCY deve ser > 0")
+		return fmt.Errorf("carregar config: WORKER_CONCURRENCY deve ser > 0")
 	}
 	if cfg.Sync.JobTimeout <= 0 {
-		return Config{}, fmt.Errorf("carregar config: JOB_TIMEOUT deve ser > 0")
+		return fmt.Errorf("carregar config: JOB_TIMEOUT deve ser > 0")
 	}
-	return cfg, nil
+	return nil
 }
 
 // validateAuth aplica a política de segurança do modo de autenticação (ver type Auth).
@@ -240,3 +265,17 @@ func parseOldKeys(raw string) (map[int][]byte, error) {
 
 // IsProd indica se o serviço roda em produção.
 func (c Config) IsProd() bool { return c.Env == "prod" }
+
+// AI configura o ai-worker (CLI do Claude Code headless). A API não executa a CLI: só enfileira e
+// repassa a stream. OAuthToken é o CLAUDE_CODE_OAUTH_TOKEN da assinatura (SEGREDO: só vai para o
+// processo da CLI, nunca é logado) e só é exigido pelo ai-worker.
+type AI struct {
+	ClaudeBin  string        `env:"AI_CLAUDE_BIN" envDefault:"claude"`
+	OAuthToken string        `env:"CLAUDE_CODE_OAUTH_TOKEN"`
+	Model      string        `env:"AI_MODEL" envDefault:"sonnet"`
+	JobTimeout time.Duration `env:"AI_JOB_TIMEOUT" envDefault:"6m"`
+	// Home é o HOME da CLI (~/.claude guarda as sessões do --resume do chat).
+	Home string `env:"AI_HOME" envDefault:"/home/node"`
+	// Workdir é a raiz dos cwd da CLI (um por conversa: o --resume exige o mesmo cwd).
+	Workdir string `env:"AI_WORKDIR" envDefault:"/home/node/work"`
+}

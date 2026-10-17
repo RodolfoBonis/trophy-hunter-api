@@ -115,3 +115,15 @@ func TestLoadRejectsBadOldEncKeys(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "TOKEN_ENC_KEYS_OLD")
 }
+
+func TestLoadWithoutCrypto(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("AUTH_ISSUER", "https://kc/realms/platform")
+	t.Setenv("TOKEN_ENC_KEY", "")
+	_, err := config.Load()
+	require.Error(t, err, "API/worker exigem a chave")
+	cfg, err := config.Load(config.WithoutCrypto())
+	require.NoError(t, err)
+	require.Empty(t, cfg.Crypto.Key)
+	require.Equal(t, "sonnet", cfg.AI.Model)
+}

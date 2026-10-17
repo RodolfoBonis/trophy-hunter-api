@@ -50,7 +50,6 @@ func NewRouter(d RouterDeps) http.Handler {
 	r.Use(middleware.SecurityHeaders)
 	r.Use(middleware.CORS(d.CORSAllowedOrigins))
 	r.Use(middleware.Tracing(d.ServiceName))
-	r.Use(middleware.Timeout(requestTimeout(d.WriteTimeout)))
 
 	h := d.Handlers
 
@@ -64,31 +63,49 @@ func NewRouter(d RouterDeps) http.Handler {
 		r.Use(d.Auth.Middleware)
 		r.Use(middleware.EnforceJSONBody)
 
-		r.Get("/me", h.getMe)
+		// SSE da IA: conexão longa (heartbeat + deadline de escrita renovado a cada evento), por
+		// isso FORA do timeout de request.
+		r.Get("/ai/streams/{id}", h.aiStream)
 
-		r.Get("/integrations", h.listIntegrations)
-		r.Post("/integrations/steam", h.connectSteam)
-		r.Post("/integrations/psn", h.connectPSN)
-		r.Post("/integrations/{id}/reconnect", h.reconnectIntegration)
-		r.Patch("/integrations/{id}", h.updateIntegration)
-		r.Delete("/integrations/{id}", h.deleteIntegration)
-		r.Post("/integrations/{id}/sync", h.syncIntegration)
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.Timeout(requestTimeout(d.WriteTimeout)))
 
-		r.Get("/games", h.listGames)
-		r.Get("/games/{id}", h.getGame)
-		r.Post("/games/{id}/sync", h.syncGame)
+			r.Get("/me", h.getMe)
 
-		r.Get("/sync-runs", h.listSyncRuns)
+			r.Get("/integrations", h.listIntegrations)
+			r.Post("/integrations/steam", h.connectSteam)
+			r.Post("/integrations/psn", h.connectPSN)
+			r.Post("/integrations/{id}/reconnect", h.reconnectIntegration)
+			r.Patch("/integrations/{id}", h.updateIntegration)
+			r.Delete("/integrations/{id}", h.deleteIntegration)
+			r.Post("/integrations/{id}/sync", h.syncIntegration)
 
-		r.Get("/stats", h.getStats)
-		r.Get("/next", h.getNext)
-		r.Get("/timeline", h.getTimeline)
-		r.Get("/alerts", h.getAlerts)
-		r.Patch("/games/{id}", h.patchGame)
-		r.Post("/games/{id}/link", h.linkGame)
-		r.Delete("/games/{id}/link", h.unlinkGame)
-		r.Get("/games/{id}/link-candidates", h.linkCandidates)
-		r.Patch("/trophies/{id}", h.patchTrophy)
+			r.Get("/games", h.listGames)
+			r.Get("/games/{id}", h.getGame)
+			r.Post("/games/{id}/sync", h.syncGame)
+
+			r.Get("/sync-runs", h.listSyncRuns)
+
+			r.Get("/stats", h.getStats)
+			r.Get("/next", h.getNext)
+			r.Get("/timeline", h.getTimeline)
+			r.Get("/alerts", h.getAlerts)
+			r.Patch("/games/{id}", h.patchGame)
+			r.Post("/games/{id}/link", h.linkGame)
+			r.Delete("/games/{id}/link", h.unlinkGame)
+			r.Get("/games/{id}/link-candidates", h.linkCandidates)
+			r.Patch("/trophies/{id}", h.patchTrophy)
+
+			// IA: guias, roadmap e chat (geração assíncrona; resposta em /ai/streams/{id}).
+			r.Get("/trophies/{id}/guide", h.getTrophyGuide)
+			r.Post("/trophies/{id}/guide", h.generateTrophyGuide)
+			r.Get("/games/{id}/roadmap", h.getRoadmap)
+			r.Post("/games/{id}/roadmap", h.generateRoadmap)
+			r.Patch("/ai/guides/{id}", h.editGuide)
+			r.Get("/games/{id}/chat", h.getChat)
+			r.Post("/games/{id}/chat", h.sendChat)
+			r.Delete("/games/{id}/chat", h.resetChat)
+		})
 	})
 
 	return r

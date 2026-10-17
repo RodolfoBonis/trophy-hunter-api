@@ -8,6 +8,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AiGuide struct {
+	ID               pgtype.UUID
+	Scope            string
+	Platform         string
+	GameExternalID   string
+	TrophyExternalID string
+	Status           string
+	Content          []byte
+	EditedContent    []byte
+	SchemaVersion    int32
+	Model            string
+	Error            string
+	GeneratedAt      pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+}
+
 type BestGame struct {
 	ID              pgtype.UUID
 	IntegrationID   pgtype.UUID
@@ -26,6 +43,27 @@ type BestGame struct {
 	LastUnlockAt    pgtype.Timestamptz
 	CompletionPct   float64
 	AccountRank     int64
+}
+
+type ChatMessage struct {
+	ID        pgtype.UUID
+	ThreadID  pgtype.UUID
+	Role      string
+	Content   string
+	Status    string
+	Error     string
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
+type ChatThread struct {
+	ID              pgtype.UUID
+	Platform        string
+	GameExternalID  string
+	ClaudeSessionID string
+	Archived        bool
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
 }
 
 type Game struct {

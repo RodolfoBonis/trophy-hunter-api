@@ -3,6 +3,10 @@
 package api
 
 import (
+	"github.com/redis/go-redis/v9"
+
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai"
+
 	"log/slog"
 	"net/http"
 
@@ -17,6 +21,8 @@ type Handlers struct {
 	q               *dbgen.Queries
 	pool            *pgxpool.Pool
 	syncer          *syncpkg.Syncer
+	ai              *ai.Service
+	rdb             *redis.Client
 	logger          *slog.Logger
 	almostThreshold float64
 	authReady       func() bool
@@ -24,9 +30,12 @@ type Handlers struct {
 
 // HandlerDeps injeta as dependências dos handlers.
 type HandlerDeps struct {
-	Queries         *dbgen.Queries
-	Pool            *pgxpool.Pool
-	Syncer          *syncpkg.Syncer
+	Queries *dbgen.Queries
+	Pool    *pgxpool.Pool
+	Syncer  *syncpkg.Syncer
+	// AI enfileira guias/chat; Redis é o canal da resposta em tempo real (SSE). nil = IA desligada.
+	AI              *ai.Service
+	Redis           *redis.Client
 	Logger          *slog.Logger
 	AlmostThreshold float64
 	// AuthReady indica se o autenticador já carregou o provider OIDC (readyz). nil = sempre pronto.
@@ -47,6 +56,8 @@ func NewHandlers(d HandlerDeps) *Handlers {
 		q:               d.Queries,
 		pool:            d.Pool,
 		syncer:          d.Syncer,
+		ai:              d.AI,
+		rdb:             d.Redis,
 		logger:          d.Logger,
 		almostThreshold: at,
 		authReady:       authReady,

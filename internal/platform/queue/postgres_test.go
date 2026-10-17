@@ -223,3 +223,25 @@ func TestCleanupRemovesOldTerminalJobs(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE id=$1`, c1.ID).Scan(&count))
 	require.Equal(t, 0, count)
 }
+
+func TestClaimFiltersByKind(t *testing.T) {
+	pool := testsupport.NewPostgres(t)
+	q := queue.NewPostgres(pool, queue.DefaultBackoff)
+	ctx := context.Background()
+
+	ai, _, err := q.Enqueue(ctx, queue.EnqueueParams{Kind: "ai_guide"})
+	require.NoError(t, err)
+	sync, _, err := q.Enqueue(ctx, queue.EnqueueParams{Kind: "sync_game"})
+	require.NoError(t, err)
+
+	got, err := q.Claim(ctx, time.Minute, "sync_platform", "sync_game")
+	require.NoError(t, err)
+	require.Equal(t, sync.ID, got.ID, "o worker de sync não pega job de IA")
+	none, err := q.Claim(ctx, time.Minute, "sync_platform", "sync_game")
+	require.NoError(t, err)
+	require.Nil(t, none)
+
+	got, err = q.Claim(ctx, time.Minute, "ai_guide", "ai_chat")
+	require.NoError(t, err)
+	require.Equal(t, ai.ID, got.ID)
+}

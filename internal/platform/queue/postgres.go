@@ -80,7 +80,7 @@ RETURNING ` + returningCols
 // Claim reivindica o próximo job elegível. Antes, move para 'dead' os jobs com lease expirado e
 // tentativas esgotadas (poison guard). Depois pega um job queued pronto OU running com lease
 // expirado e tentativas restantes, incrementando attempts e gerando um novo lease_token.
-func (q *PostgresQueue) Claim(ctx context.Context, lease time.Duration) (*Job, error) {
+func (q *PostgresQueue) Claim(ctx context.Context, lease time.Duration, kinds ...string) (*Job, error) {
 	// Poison guard: um job cujo worker morreu (lease expirado) e que já esgotou as tentativas não
 	// deve ser reivindicado de novo — vai direto para 'dead'.
 	const poisonStmt = `
@@ -108,13 +108,17 @@ WHERE id = (
         status = 'queued'
         OR (status = 'running' AND locked_until < now() AND attempts < max_attempts)
       )
+      AND (cardinality($2::text[]) = 0 OR kind = ANY($2::text[]))
     ORDER BY run_at
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
 RETURNING ` + returningCols
 
-	row := q.pool.QueryRow(ctx, stmt, lease)
+	if kinds == nil {
+		kinds = []string{}
+	}
+	row := q.pool.QueryRow(ctx, stmt, lease, kinds)
 	job, err := scanJob(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil

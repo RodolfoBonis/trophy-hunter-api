@@ -93,7 +93,9 @@ type Queue interface {
 	Enqueue(ctx context.Context, p EnqueueParams) (job *Job, enqueued bool, err error)
 	// Claim reivindica o próximo job elegível (queued ou com lease expirado e tentativas restantes),
 	// marcando-o running com um novo lease + lease_token. Devolve (nil, nil) quando não há job.
-	Claim(ctx context.Context, lease time.Duration) (*Job, error)
+	// kinds restringe aos tipos dados (vazio = qualquer): o worker de sync e o ai-worker dividem a
+	// mesma tabela sem pegar o job um do outro.
+	Claim(ctx context.Context, lease time.Duration, kinds ...string) (*Job, error)
 	// Complete marca o job como concluído. Devolve ErrLeaseLost se o lease_token não bater.
 	Complete(ctx context.Context, id, leaseToken string) error
 	// Fail registra uma falha: reagenda com backoff enquanto houver tentativas; esgotadas (ou erro
