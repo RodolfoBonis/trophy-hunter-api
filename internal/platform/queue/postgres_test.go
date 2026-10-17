@@ -27,6 +27,7 @@ func TestEnqueueClaimComplete(t *testing.T) {
 	require.NotNil(t, claimed)
 	require.Equal(t, job.ID, claimed.ID)
 	require.Equal(t, 1, claimed.Attempts)
+	require.NotEmpty(t, claimed.LeaseToken, "claim deve gerar um lease_token")
 	require.JSONEq(t, `{"platform":"steam"}`, string(claimed.Payload))
 
 	// Nada mais elegível (o único job está running).
@@ -34,7 +35,7 @@ func TestEnqueueClaimComplete(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, none)
 
-	require.NoError(t, q.Complete(ctx, claimed.ID))
+	require.NoError(t, q.Complete(ctx, claimed.ID, claimed.LeaseToken))
 	after, err := q.Claim(ctx, time.Minute)
 	require.NoError(t, err)
 	require.Nil(t, after)
@@ -57,7 +58,7 @@ func TestDedupeSuppressesDuplicate(t *testing.T) {
 	// Após concluir, um novo enqueue com a mesma chave é permitido.
 	claimed, err := q.Claim(ctx, time.Minute)
 	require.NoError(t, err)
-	require.NoError(t, q.Complete(ctx, claimed.ID))
+	require.NoError(t, q.Complete(ctx, claimed.ID, claimed.LeaseToken))
 
 	_, enq3, err := q.Enqueue(ctx, queue.EnqueueParams{Kind: "sync_game", DedupeKey: "game:1"})
 	require.NoError(t, err)
@@ -77,7 +78,7 @@ func TestFailRetriesThenDead(t *testing.T) {
 	c1, err := q.Claim(ctx, time.Minute)
 	require.NoError(t, err)
 	require.NotNil(t, c1)
-	require.NoError(t, q.Fail(ctx, c1.ID, errors.New("boom")))
+	require.NoError(t, q.Fail(ctx, c1.ID, c1.LeaseToken, errors.New("boom")))
 
 	time.Sleep(10 * time.Millisecond)
 
@@ -86,7 +87,7 @@ func TestFailRetriesThenDead(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, c2)
 	require.Equal(t, 2, c2.Attempts)
-	require.NoError(t, q.Fail(ctx, c2.ID, errors.New("boom again")))
+	require.NoError(t, q.Fail(ctx, c2.ID, c2.LeaseToken, errors.New("boom again")))
 
 	// Não deve mais ser reivindicável.
 	time.Sleep(10 * time.Millisecond)
@@ -119,4 +120,106 @@ func TestClaimReclaimsExpiredLease(t *testing.T) {
 	require.NotNil(t, c2, "job com lease expirado deve ser reivindicável")
 	require.Equal(t, c1.ID, c2.ID)
 	require.Equal(t, 2, c2.Attempts)
+	require.NotEqual(t, c1.LeaseToken, c2.LeaseToken, "o reclaim gera um novo lease_token")
+}
+
+// TestLeaseOwnership garante que Complete/Fail só valem para o dono atual do lease: um worker com
+// lease expirado (re-reivindicado por outro) recebe ErrLeaseLost e não processa duas vezes.
+func TestLeaseOwnership(t *testing.T) {
+	pool := testsupport.NewPostgres(t)
+	q := queue.NewPostgres(pool, queue.DefaultBackoff)
+	ctx := context.Background()
+
+	_, _, err := q.Enqueue(ctx, queue.EnqueueParams{Kind: "sync_game"})
+	require.NoError(t, err)
+
+	c1, err := q.Claim(ctx, 1*time.Millisecond) // lease curtíssimo
+	require.NoError(t, err)
+	require.NotNil(t, c1)
+
+	time.Sleep(20 * time.Millisecond)
+
+	c2, err := q.Claim(ctx, time.Minute) // outro worker reivindica
+	require.NoError(t, err)
+	require.NotNil(t, c2)
+	require.Equal(t, c1.ID, c2.ID)
+
+	// O worker "zumbi" (token antigo) não consegue completar nem falhar.
+	require.ErrorIs(t, q.Complete(ctx, c1.ID, c1.LeaseToken), queue.ErrLeaseLost)
+	require.ErrorIs(t, q.Fail(ctx, c1.ID, c1.LeaseToken, errors.New("zumbi")), queue.ErrLeaseLost)
+
+	// O dono atual completa normalmente.
+	require.NoError(t, q.Complete(ctx, c2.ID, c2.LeaseToken))
+}
+
+// TestPoisonJobGoesDead garante que um job com lease expirado e tentativas esgotadas vai para
+// 'dead' no próximo Claim, em vez de ser reivindicado de novo (loop de job envenenado).
+func TestPoisonJobGoesDead(t *testing.T) {
+	pool := testsupport.NewPostgres(t)
+	q := queue.NewPostgres(pool, queue.DefaultBackoff)
+	ctx := context.Background()
+
+	_, _, err := q.Enqueue(ctx, queue.EnqueueParams{Kind: "sync_game", MaxAttempts: 1})
+	require.NoError(t, err)
+
+	c1, err := q.Claim(ctx, 1*time.Millisecond) // attempts=1 == max; lease curtíssimo
+	require.NoError(t, err)
+	require.NotNil(t, c1)
+	require.Equal(t, 1, c1.Attempts)
+
+	time.Sleep(20 * time.Millisecond) // lease expira; worker "morreu" sem completar
+
+	next, err := q.Claim(ctx, time.Minute)
+	require.NoError(t, err)
+	require.Nil(t, next, "job envenenado não deve ser reivindicável de novo")
+
+	var status string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM jobs WHERE id=$1`, c1.ID).Scan(&status))
+	require.Equal(t, "dead", status)
+}
+
+// TestPermanentErrorGoesDead garante que um erro Permanent mata o job na hora (sem consumir todas
+// as tentativas).
+func TestPermanentErrorGoesDead(t *testing.T) {
+	pool := testsupport.NewPostgres(t)
+	q := queue.NewPostgres(pool, queue.DefaultBackoff)
+	ctx := context.Background()
+
+	_, _, err := q.Enqueue(ctx, queue.EnqueueParams{Kind: "sync_game", MaxAttempts: 5})
+	require.NoError(t, err)
+
+	c1, err := q.Claim(ctx, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, c1)
+	require.Equal(t, 1, c1.Attempts, "primeira tentativa")
+
+	require.NoError(t, q.Fail(ctx, c1.ID, c1.LeaseToken, queue.Permanent(errors.New("credencial inválida"))))
+
+	var status string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM jobs WHERE id=$1`, c1.ID).Scan(&status))
+	require.Equal(t, "dead", status, "erro permanente mata o job mesmo com tentativas restantes")
+}
+
+func TestCleanupRemovesOldTerminalJobs(t *testing.T) {
+	pool := testsupport.NewPostgres(t)
+	q := queue.NewPostgres(pool, queue.DefaultBackoff)
+	ctx := context.Background()
+
+	_, _, err := q.Enqueue(ctx, queue.EnqueueParams{Kind: "sync_game"})
+	require.NoError(t, err)
+	c1, err := q.Claim(ctx, time.Minute)
+	require.NoError(t, err)
+	require.NoError(t, q.Complete(ctx, c1.ID, c1.LeaseToken))
+
+	// Envelhece o job terminal para antes da janela de retenção.
+	_, err = pool.Exec(ctx, `UPDATE jobs SET updated_at = now() - interval '8 days' WHERE id=$1`, c1.ID)
+	require.NoError(t, err)
+
+	n, err := q.Cleanup(ctx, 7*24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	var count int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE id=$1`, c1.ID).Scan(&count))
+	require.Equal(t, 0, count)
 }

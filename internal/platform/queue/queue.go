@@ -2,10 +2,15 @@
 //
 // Garantias:
 //   - Claim atômico com FOR UPDATE SKIP LOCKED: réplicas concorrentes nunca pegam o mesmo job.
-//   - Lease (locked_until): se um worker morre segurando um job, o lease expira e outro reivindica.
+//   - Lease (locked_until) + lease_token: se um worker morre segurando um job, o lease expira e
+//     outro reivindica. Complete/Fail exigem o lease_token do claim — um worker "zumbi" (lease já
+//     expirado e re-reivindicado por outro) não consegue marcar done/fail e recebe ErrLeaseLost.
+//   - Poison guard: no claim, jobs com lease expirado E attempts esgotadas vão para 'dead' em vez
+//     de serem reivindicados de novo (evita loop de job envenenado).
 //   - Dedupe: Enqueue com DedupeKey não-vazio é no-op se já existe um job idêntico queued/running
 //     (índice parcial único uq_jobs_dedupe_active).
-//   - Backoff exponencial com jitter até max_attempts; exaurido → estado 'dead'.
+//   - Backoff exponencial com jitter até max_attempts; exaurido → estado 'dead'. Erros Permanent
+//     vão direto para 'dead' sem consumir tentativas.
 //
 // A interface Queue isola a implementação para permitir trocar por outro broker depois.
 package queue
@@ -13,8 +18,14 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 )
+
+// ErrLeaseLost indica que Complete/Fail não afetou o job: ele não está mais 'running' sob o
+// lease_token informado (outro worker o reivindicou após o lease expirar). O chamador deve parar
+// de processá-lo, sem erro fatal.
+var ErrLeaseLost = errors.New("queue: lease perdido (job reivindicado por outro worker)")
 
 // Status é o estado de um job.
 type Status string
@@ -24,9 +35,29 @@ const (
 	StatusQueued  Status = "queued"
 	StatusRunning Status = "running"
 	StatusDone    Status = "done"
-	StatusFailed  Status = "failed"
 	StatusDead    Status = "dead"
 )
+
+// permanentError marca um erro que NÃO deve ser retentado: o job vai direto para 'dead'.
+type permanentError struct{ err error }
+
+func (e *permanentError) Error() string { return e.err.Error() }
+func (e *permanentError) Unwrap() error { return e.err }
+
+// Permanent embrulha um erro para sinalizar que o job deve morrer imediatamente (sem retry).
+// Use para falhas que não se resolvem com nova tentativa (credencial inválida, perfil privado).
+func Permanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &permanentError{err: err}
+}
+
+// IsPermanent indica se err (ou algum da cadeia) foi marcado como Permanent.
+func IsPermanent(err error) bool {
+	var pe *permanentError
+	return errors.As(err, &pe)
+}
 
 // Job é uma unidade de trabalho persistida.
 type Job struct {
@@ -38,6 +69,8 @@ type Job struct {
 	Attempts    int
 	MaxAttempts int
 	LastError   string
+	// LeaseToken identifica a posse atual do job (devolvido pelo Claim; exigido por Complete/Fail).
+	LeaseToken string
 }
 
 // EnqueueParams descreve um job a enfileirar.
@@ -49,7 +82,7 @@ type EnqueueParams struct {
 	DedupeKey string
 	// MaxAttempts default 5 quando <= 0.
 	MaxAttempts int
-	// RunAt agenda o job para o futuro (zero = agora).
+	// RunAt agenda o job para o futuro (zero = agora, resolvido pelo now() do banco).
 	RunAt time.Time
 }
 
@@ -58,13 +91,16 @@ type Queue interface {
 	// Enqueue insere um job. Com DedupeKey e um job ativo idêntico existente, devolve
 	// (nil, false, nil) — enfileiramento suprimido, sem erro.
 	Enqueue(ctx context.Context, p EnqueueParams) (job *Job, enqueued bool, err error)
-	// Claim reivindica o próximo job elegível (queued ou com lease expirado), marcando-o running
-	// com um novo lease. Devolve (nil, nil) quando não há job elegível.
+	// Claim reivindica o próximo job elegível (queued ou com lease expirado e tentativas restantes),
+	// marcando-o running com um novo lease + lease_token. Devolve (nil, nil) quando não há job.
 	Claim(ctx context.Context, lease time.Duration) (*Job, error)
-	// Complete marca o job como concluído com sucesso.
-	Complete(ctx context.Context, id string) error
-	// Fail registra uma falha: reagenda com backoff enquanto houver tentativas; senão 'dead'.
-	Fail(ctx context.Context, id string, cause error) error
+	// Complete marca o job como concluído. Devolve ErrLeaseLost se o lease_token não bater.
+	Complete(ctx context.Context, id, leaseToken string) error
+	// Fail registra uma falha: reagenda com backoff enquanto houver tentativas; esgotadas (ou erro
+	// Permanent), marca 'dead'. Devolve ErrLeaseLost se o lease_token não bater.
+	Fail(ctx context.Context, id, leaseToken string, cause error) error
+	// Cleanup remove jobs terminais (done/dead) mais antigos que olderThan. Devolve quantos apagou.
+	Cleanup(ctx context.Context, olderThan time.Duration) (int64, error)
 }
 
 // BackoffConfig parametriza o backoff exponencial com jitter.
