@@ -107,7 +107,7 @@ func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, ru
 	var aiSvc *ai.Service
 	if runner != nil {
 		rdb := testsupport.NewRedis(t)
-		aiSvc = ai.New(ai.Deps{Queries: q, Queue: jobs, Redis: rdb, Runner: runner, Workdir: t.TempDir(), Logger: logger})
+		aiSvc = ai.New(ai.Deps{Queries: q, Queue: jobs, Redis: rdb, Runner: runner, Model: "sonnet", GuideModel: "opus", Workdir: t.TempDir(), Logger: logger})
 		deps.AI, deps.Redis = aiSvc, rdb
 	}
 	handlers := api.NewHandlers(deps)

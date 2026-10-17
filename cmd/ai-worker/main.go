@@ -67,7 +67,7 @@ func run() error {
 	svc := ai.New(ai.Deps{
 		Queries: dbgen.New(pool), Queue: jobs, Redis: rdb,
 		Runner: claude.New(cfg.AI.ClaudeBin, cfg.AI.OAuthToken, cfg.AI.Home, logger),
-		Model:  cfg.AI.Model, Workdir: cfg.AI.Workdir, Logger: logger,
+		Model:  cfg.AI.Model, GuideModel: cfg.AI.GuideModel, Workdir: cfg.AI.Workdir, Logger: logger,
 	})
 	worker := ai.NewWorker(svc, jobs, cfg.AI.JobTimeout, logger)
 

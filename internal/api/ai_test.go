@@ -204,6 +204,7 @@ func TestTrophyGuideStreamsAndPersists(t *testing.T) {
 	require.Contains(t, req.Prompt, "Portal 2")
 	require.Contains(t, req.Prompt, "Venceu")
 	require.Equal(t, ai.AllowedTools, req.AllowedTools)
+	require.Equal(t, "opus", req.Model, "guias usam o modelo de guia")
 	require.NotEmpty(t, req.JSONSchema)
 
 	ready := call[struct{ Guide *guideResp }](t, e, http.MethodGet, base, "", http.StatusOK)
@@ -300,6 +301,7 @@ func TestChatResumesAndRebuildsContext(t *testing.T) {
 	}
 	require.Equal(t, "Você ainda pode pegar o Segredo.", text.String())
 	first := r.last()
+	require.Equal(t, "sonnet", first.Model, "chat usa o modelo rápido")
 	require.Empty(t, first.ResumeID)
 	require.Contains(t, first.Prompt, "Minha pergunta: Perdi algo?")
 	require.Contains(t, first.Prompt, "Segredo", "contexto com o que falta")
