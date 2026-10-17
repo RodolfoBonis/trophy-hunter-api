@@ -3,6 +3,7 @@ package sync_test
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -27,6 +28,12 @@ type fakeSteam struct {
 	achievements map[int][]steam.PlayerAchievement
 	percentages  map[int]map[string]float64
 	achErr       map[int]error // injeta erro em GetPlayerAchievements por appid
+	assets       map[int]steam.AppAssets
+	assetsErr    error
+}
+
+func (f *fakeSteam) GetAppAssets(context.Context, []int) (map[int]steam.AppAssets, error) {
+	return f.assets, f.assetsErr
 }
 
 func (f *fakeSteam) GetOwnedGames(context.Context, string) ([]steam.OwnedGame, error) {
@@ -333,4 +340,38 @@ func TestConnectPrivateProfileMarksErrorPrivate(t *testing.T) {
 	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "FAKEKEY", IDOrVanity: "76561197960000000"})
 	require.NoError(t, err)
 	require.Equal(t, "error_private", integ.Status)
+}
+
+// TestCoverUsesStoreAssets: a capa vem dos assets da loja (caminho com hash, apps novos); se a
+// Steam não devolver a arte ou GetItems falhar, cai no caminho fixo antigo.
+func TestCoverUsesStoreAssets(t *testing.T) {
+	cases := []struct {
+		name      string
+		assets    map[int]steam.AppAssets
+		assetsErr error
+		want      string
+	}{
+		{"vertical da loja", map[int]steam.AppAssets{620: {LibraryCapsule: "https://shared/cap.jpg", Header: "https://shared/h.jpg"}}, nil, "https://shared/cap.jpg"},
+		{"só horizontal", map[int]steam.AppAssets{620: {Header: "https://shared/h.jpg"}}, nil, "https://shared/h.jpg"},
+		{"GetItems falhou", nil, errors.New("boom"), "https://cdn.akamai.steamstatic.com/steam/apps/620/library_600x900.jpg"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := testsupport.NewPostgres(t)
+			ctx := context.Background()
+			q := dbgen.New(pool)
+			jobs := queue.NewPostgres(pool, queue.DefaultBackoff)
+			fake := newFake()
+			fake.assets, fake.assetsErr = tc.assets, tc.assetsErr
+			syncer := newSyncer(t, pool, q, jobs, fake)
+
+			integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "K", IDOrVanity: "76561197960000000"})
+			require.NoError(t, err)
+			processAll(t, jobs, syncer)
+
+			game, err := q.GetGameByExternal(ctx, dbgen.GetGameByExternalParams{IntegrationID: integ.ID, ExternalID: "620"})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, game.Cover)
+		})
+	}
 }

@@ -2,6 +2,7 @@ package steam
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"strconv"
 	"strings"
@@ -155,4 +156,61 @@ func (c *Client) ResolveVanityURL(ctx context.Context, vanity string) (string, e
 		return "", ErrVanityNotFound
 	}
 	return raw.Response.SteamID, nil
+}
+
+// assetsBase é o CDN dos assets de loja da Steam (store_item_assets). Os apps novos têm assets com
+// hash no caminho (ex.: .../apps/3764200/<hash>/library_capsule.jpg) — o caminho fixo antigo
+// (/steam/apps/<appid>/library_600x900.jpg) dá 404 para eles. GetItems devolve o caminho real.
+const assetsBase = "https://shared.akamai.steamstatic.com/store_item_assets/"
+
+// AppAssets são as URLs resolvidas das artes de um app (vazias quando a Steam não tem a arte).
+type AppAssets struct {
+	// LibraryCapsule é a capa vertical 600x900 (biblioteca).
+	LibraryCapsule string
+	// Header é a arte horizontal 460x215 (fallback e fundo do cabeçalho).
+	Header string
+}
+
+// GetAppAssets resolve as artes de vários apps via IStoreBrowseService/GetItems (não exige key; o
+// limite por chamada é ~100 ids). Apps sem item na loja (removidos) ficam fora do mapa.
+func (c *Client) GetAppAssets(ctx context.Context, appIDs []int) (map[int]AppAssets, error) {
+	ids := make([]map[string]int, 0, len(appIDs))
+	for _, id := range appIDs {
+		ids = append(ids, map[string]int{"appid": id})
+	}
+	input, err := json.Marshal(map[string]any{
+		"ids":          ids,
+		"context":      map[string]string{"language": "english", "country_code": "US"},
+		"data_request": map[string]bool{"include_assets": true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	q.Set("input_json", string(input))
+
+	var raw storeItemsResp
+	if err := c.doJSON(ctx, "GetItems", "/IStoreBrowseService/GetItems/v1/", q, &raw); err != nil {
+		return nil, err
+	}
+	out := make(map[int]AppAssets, len(raw.Response.StoreItems))
+	for _, it := range raw.Response.StoreItems {
+		a := it.Assets
+		if it.AppID == 0 || a.AssetURLFormat == "" {
+			continue
+		}
+		out[it.AppID] = AppAssets{
+			LibraryCapsule: assetURL(a.AssetURLFormat, a.LibraryCapsule),
+			Header:         assetURL(a.AssetURLFormat, a.Header),
+		}
+	}
+	return out, nil
+}
+
+// assetURL monta a URL de um asset a partir do formato ("steam/apps/<id>/${FILENAME}?t=...").
+func assetURL(format, filename string) string {
+	if filename == "" {
+		return ""
+	}
+	return assetsBase + strings.Replace(format, "${FILENAME}", filename, 1)
 }

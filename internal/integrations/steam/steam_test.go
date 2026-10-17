@@ -199,3 +199,23 @@ func TestAPIKeyNeverInError(t *testing.T) {
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "FAKEKEY", "a API key nunca deve aparecer em erros")
 }
+
+func TestGetAppAssets(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/IStoreBrowseService/GetItems/v1/", r.URL.Path)
+		require.Contains(t, r.URL.Query().Get("input_json"), `"appid":3764200`)
+		_, _ = w.Write([]byte(`{"response":{"store_items":[
+			{"appid":3764200,"assets":{"asset_url_format":"steam/apps/3764200/${FILENAME}?t=1","library_capsule":"abc/library_capsule.jpg","header":"def/header.jpg"}},
+			{"appid":620,"assets":{"asset_url_format":"steam/apps/620/${FILENAME}?t=2","library_capsule":"library_600x900.jpg"}},
+			{"appid":999,"assets":{}}
+		]}}`))
+	}))
+	got, err := c.GetAppAssets(context.Background(), []int{3764200, 620, 999})
+	require.NoError(t, err)
+	require.Equal(t, "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3764200/abc/library_capsule.jpg?t=1", got[3764200].LibraryCapsule)
+	require.Equal(t, "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3764200/def/header.jpg?t=1", got[3764200].Header)
+	require.Equal(t, "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/620/library_600x900.jpg?t=2", got[620].LibraryCapsule)
+	require.Empty(t, got[620].Header)
+	_, ok := got[999]
+	require.False(t, ok, "app sem assets fica fora do mapa")
+}

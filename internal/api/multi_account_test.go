@@ -66,6 +66,9 @@ func (f accountFake) GetPlayerSummary(_ context.Context, id string) (steam.Playe
 	f.mu.Unlock()
 	return steam.PlayerSummary{SteamID: id, PersonaName: "persona-" + id[len(id)-1:], CommunityVisibleState: 3}, nil
 }
+func (f accountFake) GetAppAssets(context.Context, []int) (map[int]steam.AppAssets, error) {
+	return nil, nil
+}
 func (f accountFake) ResolveVanityURL(context.Context, string) (string, error) { return steamAlt, nil }
 
 type gameAccount struct {

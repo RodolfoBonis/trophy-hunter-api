@@ -78,6 +78,8 @@ func (s *Syncer) handlePlatform(ctx context.Context, p PlatformPayload) error {
 		return nil
 	}
 
+	assets := s.resolveAssets(ctx, client, owned)
+
 	createEvents := integ.InitialSyncDone
 	total := 0
 	for _, og := range owned {
@@ -90,7 +92,7 @@ func (s *Syncer) handlePlatform(ctx context.Context, p PlatformPayload) error {
 			return queue.Permanent(fmt.Errorf("carregar jogo: %w", priorErr))
 		}
 
-		gameRow, uerr := s.upsertGameIdentity(ctx, integID, og)
+		gameRow, uerr := s.upsertGameIdentity(ctx, integID, og, assets[og.AppID])
 		if uerr != nil {
 			s.failPlatform(ctx, runID, integID, uerr)
 			return queue.Permanent(fmt.Errorf("upsert jogo: %w", uerr))
@@ -360,7 +362,7 @@ func (s *Syncer) applyEarned(ctx context.Context, trophyID pgtype.UUID, achieved
 
 // upsertGameIdentity insere/atualiza identidade + exibição de um jogo Steam (sem tocar na marca
 // d'água nem reverter has_achievements — ver UpsertGameIdentity).
-func (s *Syncer) upsertGameIdentity(ctx context.Context, integID pgtype.UUID, og steam.OwnedGame) (dbgen.Game, error) {
+func (s *Syncer) upsertGameIdentity(ctx context.Context, integID pgtype.UUID, og steam.OwnedGame, art steam.AppAssets) (dbgen.Game, error) {
 	icon := ""
 	if og.ImgIconURL != "" {
 		icon = fmt.Sprintf(iconURLFmt, og.AppID, og.ImgIconURL)
@@ -373,7 +375,7 @@ func (s *Syncer) upsertGameIdentity(ctx context.Context, integID pgtype.UUID, og
 		Title:           og.Name,
 		NormalizedTitle: NormalizeTitle(og.Name),
 		Icon:            icon,
-		Cover:           fmt.Sprintf(coverURLFmt, og.AppID),
+		Cover:           coverURL(og.AppID, art),
 		Platforms:       []string{},
 		HasAchievements: og.HasCommunityVisibleStats, // só vale p/ INSERT; no conflito é preservado
 		LastPlayedAt:    tsFromUnix(og.RtimeLastPlayed),
@@ -582,4 +584,41 @@ func (s *Syncer) platformIntegrationID(ctx context.Context, p PlatformPayload) (
 		return pgtype.UUID{}, ErrNotConnected
 	}
 	return integs[0].ID, nil
+}
+
+// assetsBatch é o máximo de appids por chamada a GetItems.
+const assetsBatch = 100
+
+// resolveAssets busca as artes reais (com hash no caminho) da biblioteca em lotes. Falha aqui não
+// derruba o sync: os jogos sem arte resolvida caem no caminho fixo antigo (coverURL).
+func (s *Syncer) resolveAssets(ctx context.Context, client SteamAPI, owned []steam.OwnedGame) map[int]steam.AppAssets {
+	out := make(map[int]steam.AppAssets, len(owned))
+	for start := 0; start < len(owned); start += assetsBatch {
+		end := min(start+assetsBatch, len(owned))
+		ids := make([]int, 0, end-start)
+		for _, og := range owned[start:end] {
+			ids = append(ids, og.AppID)
+		}
+		got, err := client.GetAppAssets(ctx, ids)
+		if err != nil {
+			s.logger.Warn("falha ao resolver artes dos jogos; usando caminho padrão", slog.String("err", err.Error()))
+			continue
+		}
+		for id, a := range got {
+			out[id] = a
+		}
+	}
+	return out
+}
+
+// coverURL escolhe a capa: vertical da loja (hash) → horizontal (hash) → caminho fixo antigo.
+func coverURL(appID int, art steam.AppAssets) string {
+	switch {
+	case art.LibraryCapsule != "":
+		return art.LibraryCapsule
+	case art.Header != "":
+		return art.Header
+	default:
+		return fmt.Sprintf(coverURLFmt, appID)
+	}
 }

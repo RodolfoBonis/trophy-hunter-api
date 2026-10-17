@@ -72,6 +72,7 @@ type SteamAPI interface {
 	GetGlobalAchievementPercentages(ctx context.Context, appID int) (map[string]float64, error)
 	GetPlayerSummary(ctx context.Context, steamID string) (steam.PlayerSummary, error)
 	ResolveVanityURL(ctx context.Context, vanity string) (string, error)
+	GetAppAssets(ctx context.Context, appIDs []int) (map[int]steam.AppAssets, error)
 }
 
 // SteamFactory constrói um SteamAPI para uma dada API key.

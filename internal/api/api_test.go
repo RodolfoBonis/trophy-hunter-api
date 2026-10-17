@@ -49,6 +49,9 @@ func (fakeSteam) GetGlobalAchievementPercentages(context.Context, int) (map[stri
 func (fakeSteam) GetPlayerSummary(context.Context, string) (steam.PlayerSummary, error) {
 	return steam.PlayerSummary{SteamID: "76561197960000000", PersonaName: "TH", CommunityVisibleState: 3}, nil
 }
+func (fakeSteam) GetAppAssets(context.Context, []int) (map[int]steam.AppAssets, error) {
+	return nil, nil
+}
 func (fakeSteam) ResolveVanityURL(context.Context, string) (string, error) {
 	return "76561197960000000", nil
 }

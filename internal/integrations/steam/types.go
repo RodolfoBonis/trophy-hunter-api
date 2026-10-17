@@ -152,3 +152,17 @@ func (f *flexFloat) UnmarshalJSON(b []byte) error {
 	*f = flexFloat(v)
 	return nil
 }
+
+// storeItemsResp é o recorte usado de IStoreBrowseService/GetItems (include_assets=true).
+type storeItemsResp struct {
+	Response struct {
+		StoreItems []struct {
+			AppID  int `json:"appid"`
+			Assets struct {
+				AssetURLFormat string `json:"asset_url_format"`
+				LibraryCapsule string `json:"library_capsule"`
+				Header         string `json:"header"`
+			} `json:"assets"`
+		} `json:"store_items"`
+	} `json:"response"`
+}
