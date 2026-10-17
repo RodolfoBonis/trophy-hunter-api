@@ -34,13 +34,18 @@ type PSNAPI interface {
 // ErrAccountMismatch indica que o NPSSO colado na reconexão é de OUTRA conta PSN.
 var ErrAccountMismatch = errors.New("o NPSSO é de outra conta PSN")
 
-// psnCredentials é o segredo persistido (cifrado). O NPSSO NUNCA é guardado: só os tokens.
+// psnCredentials é o segredo persistido (cifrado com AES-GCM, como todas as credenciais).
+//
+// O NPSSO também é guardado (cifrado), por decisão do usuário: o refresh token da PSN vale só ~10
+// dias e a renovação não estende o prazo, enquanto o NPSSO dura ~2 meses. O NPSSO NÃO é usado a
+// cada chamada — só para obter tokens novos quando o refresh está para vencer ou é recusado.
 type psnCredentials struct {
 	AccessToken      string    `json:"access_token"`
 	AccessExpiresAt  time.Time `json:"access_expires_at"`
 	RefreshToken     string    `json:"refresh_token"`
 	RefreshExpiresAt time.Time `json:"refresh_expires_at"`
 	AccountID        string    `json:"account_id"`
+	NPSSO            string    `json:"npsso,omitempty"`
 }
 
 // LogValue nunca expõe os tokens.
@@ -48,6 +53,9 @@ func (psnCredentials) LogValue() slog.Value { return slog.StringValue("[REDACTED
 
 // accessSkew renova o access token se ele vencer nesse intervalo.
 const accessSkew = 2 * time.Minute
+
+// refreshSkew: com o NPSSO guardado, obtém tokens novos se o refresh vencer nesse intervalo.
+const refreshSkew = 24 * time.Hour
 
 // ConnectPSNParams descreve uma nova conta PSN.
 type ConnectPSNParams struct {
@@ -84,6 +92,7 @@ func (s *Syncer) ConnectPSN(ctx context.Context, p ConnectPSNParams) (dbgen.Inte
 	creds := psnCredentials{
 		AccessToken: tok.AccessToken, AccessExpiresAt: tok.AccessExpiresAt,
 		RefreshToken: tok.RefreshToken, RefreshExpiresAt: tok.RefreshExpiresAt, AccountID: summary.AccountID,
+		NPSSO: strings.TrimSpace(p.NPSSO),
 	}
 	blob, err := s.encryptPSN(creds)
 	if err != nil {
@@ -140,6 +149,7 @@ func (s *Syncer) ReconnectPSN(ctx context.Context, integrationID pgtype.UUID, np
 	creds := psnCredentials{
 		AccessToken: tok.AccessToken, AccessExpiresAt: tok.AccessExpiresAt,
 		RefreshToken: tok.RefreshToken, RefreshExpiresAt: tok.RefreshExpiresAt, AccountID: summary.AccountID,
+		NPSSO: strings.TrimSpace(npsso),
 	}
 	if err := s.saveTokens(ctx, integ.ID, creds); err != nil {
 		return dbgen.Integration{}, err
@@ -172,6 +182,14 @@ func (s *Syncer) psnSession(ctx context.Context, integID pgtype.UUID) (dbgen.Int
 	if err := json.Unmarshal(plain, &creds); err != nil {
 		return dbgen.Integration{}, psnCredentials{}, fmt.Errorf("parse credenciais psn: %w", err)
 	}
+	// Refresh perto de vencer e NPSSO guardado: tokens novos antes de dar erro.
+	if creds.NPSSO != "" && time.Until(creds.RefreshExpiresAt) < refreshSkew {
+		renewed, rerr := s.reauthPSN(ctx, integ.ID, creds)
+		if rerr == nil {
+			return integ, renewed, nil
+		}
+		s.logger.Warn("psn: reautenticação pelo NPSSO falhou; tentando o refresh", slog.String("err", rerr.Error()))
+	}
 	if time.Until(creds.AccessExpiresAt) > accessSkew {
 		return integ, creds, nil
 	}
@@ -179,8 +197,25 @@ func (s *Syncer) psnSession(ctx context.Context, integID pgtype.UUID) (dbgen.Int
 	return integ, creds, err
 }
 
+// reauthPSN troca o NPSSO guardado por tokens novos. NPSSO expirado → ErrInvalidNPSSO (permanente).
+func (s *Syncer) reauthPSN(ctx context.Context, integID pgtype.UUID, creds psnCredentials) (psnCredentials, error) {
+	tok, err := s.psn.ExchangeNPSSO(ctx, creds.NPSSO)
+	if err != nil {
+		return creds, err
+	}
+	creds.AccessToken, creds.AccessExpiresAt = tok.AccessToken, tok.AccessExpiresAt
+	creds.RefreshToken, creds.RefreshExpiresAt = tok.RefreshToken, tok.RefreshExpiresAt
+	bgctx, cancel := bg(ctx)
+	defer cancel()
+	s.logger.Info("psn: tokens renovados pelo NPSSO guardado")
+	return creds, s.saveTokens(bgctx, integID, creds)
+}
+
 func (s *Syncer) refreshPSN(ctx context.Context, integID pgtype.UUID, creds psnCredentials) (psnCredentials, error) {
 	tok, err := s.psn.Refresh(ctx, creds.RefreshToken)
+	if errors.Is(err, psn.ErrInvalidGrant) && creds.NPSSO != "" {
+		return s.reauthPSN(ctx, integID, creds) // refresh recusado: tenta pelo NPSSO guardado
+	}
 	if err != nil {
 		return creds, err
 	}

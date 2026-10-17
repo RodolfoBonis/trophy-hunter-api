@@ -70,9 +70,12 @@ A PSN não tem API oficial; o Trophy Hunter usa a mesma API do app (como a lib `
 2. Na mesma janela, abra https://ca.account.sony.com/api/v1/ssocookie e copie o valor de `npsso`.
 3. Em **Contas → Conectar PSN**, cole o NPSSO (ou `POST /api/v1/integrations/psn {"npsso": "..."}`).
 
-O NPSSO só é trocado por access/refresh tokens e **nunca é gravado**. As renovações usam o refresh token
-(vale ~2 meses). Quando ele expira, a conta fica em **Reconectar**: cole um NPSSO novo
-(`POST /api/v1/integrations/{id}/reconnect`) — precisa ser da mesma conta. Taxa padrão: `PSN_RPS=0.5`
+O NPSSO é trocado por access/refresh tokens e fica guardado **cifrado** (AES-GCM, nunca logado nem
+devolvido ao front). Ele não é usado a cada chamada: as chamadas usam o access token e a renovação usa
+o refresh token. Como o refresh da PSN vale só ~10 dias e a renovação não estende o prazo, o worker
+usa o NPSSO guardado para obter tokens novos quando o refresh está a menos de 1 dia de vencer (ou é
+recusado). Só quando o próprio NPSSO expira (~2 meses) a conta fica em **Reconectar**: cole um NPSSO
+novo (`POST /api/v1/integrations/{id}/reconnect`, mesma conta). Taxa padrão: `PSN_RPS=0.5`
 (a PSN limita ~300 requisições a cada 15 min).
 
 ## Como o sync funciona

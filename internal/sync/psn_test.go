@@ -25,6 +25,9 @@ type fakePSN struct {
 	accessTTL    time.Duration
 	refreshFails bool
 	refreshes    int
+	exchanges    int
+	npssoExpired bool
+	refreshTTL   time.Duration
 	titles       []psn.TrophyTitle
 	user         map[string][]psn.UserTrophy
 	titleCalls   map[string]int
@@ -49,10 +52,17 @@ func newFakePSN() *fakePSN {
 }
 
 func (f *fakePSN) tokens(prefix string) psn.Tokens {
-	return psn.Tokens{AccessToken: prefix + "-ACC", AccessExpiresAt: time.Now().Add(f.accessTTL), RefreshToken: prefix + "-REF", RefreshExpiresAt: time.Now().Add(60 * 24 * time.Hour)}
+	ttl := f.refreshTTL
+	if ttl == 0 {
+		ttl = 10 * 24 * time.Hour
+	}
+	return psn.Tokens{AccessToken: prefix + "-ACC", AccessExpiresAt: time.Now().Add(f.accessTTL), RefreshToken: prefix + "-REF", RefreshExpiresAt: time.Now().Add(ttl)}
 }
 func (f *fakePSN) ExchangeNPSSO(_ context.Context, npsso string) (psn.Tokens, error) {
-	if npsso == "BAD" {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.exchanges++
+	if npsso == "BAD" || f.npssoExpired {
 		return psn.Tokens{}, psn.ErrInvalidNPSSO
 	}
 	return f.tokens(npsso), nil
@@ -184,8 +194,9 @@ func TestPSNRefreshAndReconnect(t *testing.T) {
 	processAll(t, jobs, syncer)
 	require.Positive(t, fake.refreshes, "renovou o access pelo refresh token")
 
-	// Refresh expirado → conta em "reconectar"; jobs morrem (permanente).
+	// Refresh E NPSSO guardado expirados → conta em "reconectar"; jobs morrem (permanente).
 	fake.refreshFails = true
+	fake.npssoExpired = true
 	_, _, err = syncer.EnqueuePlatformSync(ctx, integ.ID, syncpkg.ScopeIncremental, syncpkg.TriggerManual)
 	require.NoError(t, err)
 	processAll(t, jobs, syncer)
@@ -195,6 +206,7 @@ func TestPSNRefreshAndReconnect(t *testing.T) {
 
 	// NPSSO de outra conta é recusado; o da mesma conta reconecta.
 	fake.refreshFails = false
+	fake.npssoExpired = false
 	fake.account = "9999"
 	_, err = syncer.ReconnectPSN(ctx, integ.ID, "GOOD")
 	require.ErrorIs(t, err, syncpkg.ErrAccountMismatch)
@@ -203,4 +215,61 @@ func TestPSNRefreshAndReconnect(t *testing.T) {
 	re, err := syncer.ReconnectPSN(ctx, integ.ID, "NEW")
 	require.NoError(t, err)
 	require.Equal(t, "connected", re.Status)
+}
+
+// TestPSNAutoRenewWithStoredNPSSO: o refresh da PSN vale ~10 dias; com o NPSSO guardado (cifrado), o
+// sync obtém tokens novos sozinho — e só pede reconexão quando o próprio NPSSO expira.
+func TestPSNAutoRenewWithStoredNPSSO(t *testing.T) {
+	pool := testsupport.NewPostgres(t)
+	ctx := context.Background()
+	q := dbgen.New(pool)
+	jobs := queue.NewPostgres(pool, queue.DefaultBackoff)
+	fake := newFakePSN()
+	syncer := newPSNSyncer(t, pool, q, jobs, fake)
+
+	integ, err := syncer.ConnectPSN(ctx, syncpkg.ConnectPSNParams{NPSSO: "GOOD"})
+	require.NoError(t, err)
+	processAll(t, jobs, syncer)
+	base := fake.exchanges
+
+	// Refresh recusado → reautentica pelo NPSSO guardado; continua conectada.
+	fake.accessTTL = time.Second
+	fake.refreshFails = true
+	_, err = syncer.ReconnectPSN(ctx, integ.ID, "GOOD") // grava tokens com access curto
+	require.NoError(t, err)
+	processAll(t, jobs, syncer)
+	require.Greater(t, fake.exchanges, base+1, "usou o NPSSO guardado")
+	got, err := q.GetIntegration(ctx, integ.ID)
+	require.NoError(t, err)
+	require.Equal(t, "connected", got.Status)
+
+	// Refresh perto de vencer (< 1 dia) → renova proativamente pelo NPSSO.
+	fake.refreshFails = false
+	fake.accessTTL = time.Hour
+	fake.refreshTTL = time.Hour
+	_, err = syncer.ReconnectPSN(ctx, integ.ID, "GOOD")
+	require.NoError(t, err)
+	before := fake.exchanges
+	fake.refreshTTL = 10 * 24 * time.Hour
+	_, _, err = syncer.EnqueuePlatformSync(ctx, integ.ID, syncpkg.ScopeIncremental, syncpkg.TriggerManual)
+	require.NoError(t, err)
+	processAll(t, jobs, syncer)
+	require.Greater(t, fake.exchanges, before)
+	got, err = q.GetIntegration(ctx, integ.ID)
+	require.NoError(t, err)
+	require.True(t, got.RefreshTokenExpiresAt.Time.After(time.Now().Add(9*24*time.Hour)), "refresh renovado")
+
+	// NPSSO expirado + refresh recusado → reconectar.
+	fake.accessTTL = time.Second
+	fake.refreshTTL = 0
+	_, err = syncer.ReconnectPSN(ctx, integ.ID, "GOOD")
+	require.NoError(t, err)
+	fake.npssoExpired = true
+	fake.refreshFails = true
+	_, _, err = syncer.EnqueuePlatformSync(ctx, integ.ID, syncpkg.ScopeIncremental, syncpkg.TriggerManual)
+	require.NoError(t, err)
+	processAll(t, jobs, syncer)
+	got, err = q.GetIntegration(ctx, integ.ID)
+	require.NoError(t, err)
+	require.Equal(t, "needs_reconnect", got.Status)
 }
