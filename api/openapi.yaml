@@ -230,6 +230,26 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
 
   /games/{id}:
+    patch:
+      tags: [annotations]
+      operationId: patchGame
+      summary: Marcações do usuário no jogo (abandonado, prioridade, notas, tags).
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Annotations" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Game" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
     get:
       tags: [games]
       operationId: getGame
@@ -244,6 +264,91 @@ paths:
               schema: { $ref: "#/components/schemas/GameDetail" }
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+
+
+  /stats:
+    get:
+      tags: [insights]
+      operationId: getStats
+      summary: Resumo do dashboard (cada jogo conta uma vez, pela conta mais avançada).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Stats" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /next:
+    get:
+      tags: [insights]
+      operationId: getNext
+      summary: Fila "Próxima Platina" (ranking) e a sugestão "o que fazer hoje".
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NextPlatinum" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /timeline:
+    get:
+      tags: [insights]
+      operationId: getTimeline
+      summary: Desbloqueios de todas as contas, do mais recente (paginação por cursor).
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 60 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TimelinePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /alerts:
+    get:
+      tags: [insights]
+      operationId: getAlerts
+      summary: Troféus que faltam marcados como perdíveis/online/dificuldade (ou com risco de servidor fechar).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Alert" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /trophies/{id}:
+    patch:
+      tags: [annotations]
+      operationId: patchTrophy
+      summary: Marcações do usuário no troféu (tags, notas, prioridade, risco de servidor).
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Annotations" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Trophy" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
 
 components:
   securitySchemes:
@@ -431,6 +536,182 @@ components:
         tags:
           type: array
           items: { $ref: "#/components/schemas/TrophyTag" }
+    Annotations:
+      type: object
+      description: Só os campos enviados mudam. abandoned só vale para jogos.
+      properties:
+        abandoned: { type: boolean }
+        priority: { type: integer, minimum: 0, maximum: 3 }
+        notes: { type: string, maxLength: 4000 }
+        tags:
+          type: array
+          items: { $ref: "#/components/schemas/TrophyTag" }
+        server_shutdown_risk: { type: boolean }
+    Stats:
+      type: object
+      required: [games, trophies, rarest, completions, evolution]
+      properties:
+        games:
+          type: object
+          required: [total, completed, almost, in_progress, not_started, abandoned]
+          properties:
+            total: { type: integer }
+            completed: { type: integer }
+            almost: { type: integer }
+            in_progress: { type: integer }
+            not_started: { type: integer }
+            abandoned: { type: integer }
+        trophies:
+          type: object
+          required: [total, earned, platinum, gold, silver, bronze, rarity]
+          properties:
+            total: { type: integer }
+            earned: { type: integer }
+            platinum: { $ref: "#/components/schemas/TypeCount" }
+            gold: { $ref: "#/components/schemas/TypeCount" }
+            silver: { $ref: "#/components/schemas/TypeCount" }
+            bronze: { $ref: "#/components/schemas/TypeCount" }
+            rarity: { $ref: "#/components/schemas/RarityEarned" }
+        rarest:
+          type: array
+          items:
+            type: object
+            required: [id, name, type, icon, rarity_pct, game_id, game_title, platform]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              type: { $ref: "#/components/schemas/TrophyType" }
+              icon: { type: string }
+              rarity_pct: { type: number }
+              earned_at: { type: [string, "null"], format: date-time }
+              game_id: { type: string, format: uuid }
+              game_title: { type: string }
+              platform: { $ref: "#/components/schemas/Platform" }
+        completions:
+          type: array
+          items:
+            type: object
+            required: [game_id, title, platform, external_id, cover, hero, total]
+            properties:
+              game_id: { type: string, format: uuid }
+              title: { type: string }
+              platform: { $ref: "#/components/schemas/Platform" }
+              external_id: { type: string }
+              cover: { type: string }
+              hero: { type: string }
+              total: { type: integer }
+              completed_at: { type: [string, "null"], format: date-time }
+        evolution:
+          type: array
+          items:
+            type: object
+            required: [month, earned, cumulative]
+            properties:
+              month: { type: string, description: "YYYY-MM" }
+              earned: { type: integer }
+              cumulative: { type: integer }
+    RemainingTrophy:
+      type: object
+      required: [id, name, type, hidden, icon, icon_locked, tags]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        type: { $ref: "#/components/schemas/TrophyType" }
+        hidden: { type: boolean }
+        icon: { type: string }
+        icon_locked: { type: string }
+        rarity_pct: { type: [number, "null"] }
+        tags:
+          type: array
+          items: { $ref: "#/components/schemas/TrophyTag" }
+    NextPlatinum:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [game_id, title, platform, external_id, cover, hero, earned, total, remaining, completion_pct, avg_remaining_rarity, min_remaining_rarity, remaining_missable, remaining_online, priority, score, factors]
+            properties:
+              game_id: { type: string, format: uuid }
+              title: { type: string }
+              platform: { $ref: "#/components/schemas/Platform" }
+              external_id: { type: string }
+              cover: { type: string }
+              hero: { type: string }
+              earned: { type: integer }
+              total: { type: integer }
+              remaining: { type: integer }
+              completion_pct: { type: number }
+              avg_remaining_rarity: { type: number }
+              min_remaining_rarity: { type: number }
+              remaining_missable: { type: integer }
+              remaining_online: { type: integer }
+              priority: { type: integer }
+              last_unlock_at: { type: [string, "null"], format: date-time }
+              score: { type: number }
+              factors:
+                type: object
+                required: [completion, remaining, ease, priority, urgency]
+                properties:
+                  completion: { type: number }
+                  remaining: { type: number }
+                  ease: { type: number }
+                  priority: { type: number }
+                  urgency: { type: number }
+        today:
+          type: [object, "null"]
+          required: [game_id, trophies]
+          properties:
+            game_id: { type: string, format: uuid }
+            trophies:
+              type: array
+              items: { $ref: "#/components/schemas/RemainingTrophy" }
+    TimelinePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [trophy_id, name, type, icon, game_id, game_title, platform, external_id, cover, hero, account_label, completes_game]
+            properties:
+              trophy_id: { type: string, format: uuid }
+              name: { type: string }
+              description: { type: [string, "null"] }
+              type: { $ref: "#/components/schemas/TrophyType" }
+              icon: { type: string }
+              rarity_pct: { type: [number, "null"] }
+              earned_at: { type: [string, "null"], format: date-time }
+              game_id: { type: string, format: uuid }
+              game_title: { type: string }
+              platform: { $ref: "#/components/schemas/Platform" }
+              external_id: { type: string }
+              cover: { type: string }
+              hero: { type: string }
+              account_label: { type: string }
+              completes_game: { type: boolean, description: "Este desbloqueio fechou o jogo (platina/100%) na conta." }
+        next_cursor: { type: [string, "null"] }
+    Alert:
+      type: object
+      required: [trophy_id, name, type, hidden, icon, tags, server_shutdown_risk, game_id, game_title, platform]
+      properties:
+        trophy_id: { type: string, format: uuid }
+        name: { type: string }
+        type: { $ref: "#/components/schemas/TrophyType" }
+        hidden: { type: boolean }
+        icon: { type: string }
+        rarity_pct: { type: [number, "null"] }
+        tags:
+          type: array
+          items: { $ref: "#/components/schemas/TrophyTag" }
+        server_shutdown_risk: { type: boolean }
+        game_id: { type: string, format: uuid }
+        game_title: { type: string }
+        platform: { $ref: "#/components/schemas/Platform" }
     GameAccount:
       type: object
       description: Uma conta que possui o jogo, com o progresso dela.

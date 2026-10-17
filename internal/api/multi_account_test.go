@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"testing"
 
@@ -208,3 +209,5 @@ func TestMultipleSteamAccounts(t *testing.T) {
 		require.Equal(t, main.ID, it.Accounts[0].IntegrationID)
 	}
 }
+
+func urlEscape(s string) string { return url.QueryEscape(s) }

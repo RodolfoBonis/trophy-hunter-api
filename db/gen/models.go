@@ -8,6 +8,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type BestGame struct {
+	ID              pgtype.UUID
+	IntegrationID   pgtype.UUID
+	Platform        string
+	ExternalID      string
+	Title           string
+	Cover           string
+	Hero            string
+	HasAchievements bool
+	Abandoned       bool
+	Priority        int32
+	Tags            []string
+	LastPlayedAt    pgtype.Timestamptz
+	Total           int32
+	Earned          int32
+	LastUnlockAt    pgtype.Timestamptz
+	CompletionPct   float64
+	AccountRank     int64
+}
+
 type Game struct {
 	ID                  pgtype.UUID
 	Platform            string
@@ -34,6 +54,25 @@ type Game struct {
 	UpdatedAt           pgtype.Timestamptz
 	IntegrationID       pgtype.UUID
 	Hero                string
+}
+
+type GameProgress struct {
+	ID              pgtype.UUID
+	IntegrationID   pgtype.UUID
+	Platform        string
+	ExternalID      string
+	Title           string
+	Cover           string
+	Hero            string
+	HasAchievements bool
+	Abandoned       bool
+	Priority        int32
+	Tags            []string
+	LastPlayedAt    pgtype.Timestamptz
+	Total           int32
+	Earned          int32
+	LastUnlockAt    pgtype.Timestamptz
+	CompletionPct   float64
 }
 
 type Integration struct {

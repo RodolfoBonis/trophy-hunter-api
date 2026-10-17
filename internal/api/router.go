@@ -77,6 +77,13 @@ func NewRouter(d RouterDeps) http.Handler {
 		r.Post("/games/{id}/sync", h.syncGame)
 
 		r.Get("/sync-runs", h.listSyncRuns)
+
+		r.Get("/stats", h.getStats)
+		r.Get("/next", h.getNext)
+		r.Get("/timeline", h.getTimeline)
+		r.Get("/alerts", h.getAlerts)
+		r.Patch("/games/{id}", h.patchGame)
+		r.Patch("/trophies/{id}", h.patchTrophy)
 	})
 
 	return r
