@@ -6,10 +6,11 @@ info:
     API pessoal (single-user) para acompanhar conquistas Steam (e, nas próximas fases, troféus
     PSN). Todas as rotas exigem autenticação (Keycloak realm platform, role trophy-hunter-user)
     exceto /healthz, /readyz e /metrics. Em dev (AUTH_MODE=dev) use o header X-Debug-User.
-    Servida no subdomínio próprio (https://api.trophy.rb.lab); o PWA chama cross-origin (CORS).
+    Publicada como rota do gateway Gravitee em https://api.rodolfodebonis.com.br/trophy (o gateway
+    remove /trophy e encaminha para /api no serviço); o PWA chama cross-origin (CORS).
 servers:
-  - url: https://api.trophy.rb.lab/api/v1
-    description: Produção (LAN).
+  - url: https://api.rodolfodebonis.com.br/trophy/v1
+    description: Produção (gateway Gravitee).
   - url: http://localhost:8080/api/v1
     description: Dev local.
 security:
