@@ -41,11 +41,39 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-  test:
-    name: Build + unit tests
+  codegen:
+    name: Codegen + contract
     runs-on: arc-trophy-hunter-api
-    # Os testes de integração (queue/sync/api) usam testcontainers (Docker), indisponível no runner;
-    # eles pulam com -short. A cobertura de Docker roda localmente (make test com Colima).
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      # sqlc: o código gerado (db/gen) deve estar sincronizado com db/query + db/migrations.
+      - name: Install sqlc
+        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+      - name: sqlc generate + diff
+        run: |
+          "$(go env GOPATH)/bin/sqlc" generate
+          git diff --exit-code db/gen \
+            || (echo "::error::db/gen desatualizado — rode 'make gen' e commite"; exit 1)
+      # OpenAPI: o contrato é a fonte dos tipos do frontend; lint impede quebra silenciosa.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: OpenAPI lint
+        run: npx --yes --registry=https://registry.npmjs.org @redocly/cli@1.34.2 lint api/openapi.yaml
+
+  test:
+    name: Build + tests (race)
+    runs-on: arc-trophy-hunter-api
+    # O runner ARC roda com um sidecar dind (ver k3s-apps infrastructure/arc-runners/chart/
+    # values-trophy-hunter-api.yaml) que expõe o daemon em DOCKER_HOST=unix:///var/run/docker.sock.
+    # Por isso os testes de integração com testcontainers rodam no CI — sem -short.
+    env:
+      DOCKER_HOST: unix:///var/run/docker.sock
+      TESTCONTAINERS_RYUK_DISABLED: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -54,5 +82,5 @@ jobs:
           cache: false
       - name: go build
         run: go build ./...
-      - name: go test (short, race)
-        run: go test -short -race -count=1 ./...
+      - name: go test (race, com testcontainers)
+        run: go test -race -count=1 ./...

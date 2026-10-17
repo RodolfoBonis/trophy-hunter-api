@@ -1,5 +1,7 @@
 name: cd
 
+# workflow_run NÃO suporta filtro por paths (paths-ignore aqui não teria efeito). O loop do bump
+# de version.txt é cortado pelo marcador [skip ci] na mensagem de commit, checado abaixo.
 on:
   workflow_run:
     workflows: ['CI']
@@ -7,8 +9,6 @@ on:
       - completed
     branches:
       - main
-    paths-ignore:
-      - 'version.txt'
 
 permissions:
   contents: write
@@ -181,7 +181,7 @@ jobs:
     steps:
       - if: ${{ needs.build_and_deploy.result == 'success' }}
         name: Send Success Message via Telegram
-        uses: appleboy/telegram-action@master
+        uses: appleboy/telegram-action@v1.0.1
         with:
           token: ${{ secrets.BOTTOKEN }}
           to: ${{ secrets.CHAT_ID }}
@@ -192,7 +192,7 @@ jobs:
 
       - if: ${{ needs.build_and_deploy.result != 'success' }}
         name: Send Failure Message via Telegram
-        uses: appleboy/telegram-action@master
+        uses: appleboy/telegram-action@v1.0.1
         with:
           token: ${{ secrets.BOTTOKEN }}
           to: ${{ secrets.CHAT_ID }}
