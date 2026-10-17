@@ -11,33 +11,69 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const finishSyncRun = `-- name: FinishSyncRun :exec
-UPDATE sync_runs
-SET status = $2, finished_at = now(), items_changed = $3, games_touched = $4, error = $5
-WHERE id = $1
+const deleteSyncRun = `-- name: DeleteSyncRun :exec
+DELETE FROM sync_runs WHERE id = $1
 `
 
-type FinishSyncRunParams struct {
-	ID           pgtype.UUID
-	Status       string
-	ItemsChanged int32
-	GamesTouched int32
-	Error        string
-}
-
-func (q *Queries) FinishSyncRun(ctx context.Context, arg FinishSyncRunParams) error {
-	_, err := q.db.Exec(ctx, finishSyncRun,
-		arg.ID,
-		arg.Status,
-		arg.ItemsChanged,
-		arg.GamesTouched,
-		arg.Error,
-	)
+// Remove um run órfão (ex.: enfileiramento suprimido por dedupe após criar o run).
+func (q *Queries) DeleteSyncRun(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteSyncRun, id)
 	return err
 }
 
+const failSyncRun = `-- name: FailSyncRun :exec
+UPDATE sync_runs
+SET status = 'error', finished_at = now(), error = $2::text
+WHERE id = $1 AND status = 'running'
+`
+
+type FailSyncRunParams struct {
+	ID    pgtype.UUID
+	Error string
+}
+
+// Fecha o run como erro (ex.: falha ao listar a biblioteca, antes do fan-out).
+func (q *Queries) FailSyncRun(ctx context.Context, arg FailSyncRunParams) error {
+	_, err := q.db.Exec(ctx, failSyncRun, arg.ID, arg.Error)
+	return err
+}
+
+const finalizeSyncRunChild = `-- name: FinalizeSyncRunChild :one
+UPDATE sync_runs
+SET games_done    = games_done + 1,
+    games_failed  = games_failed + $2::int,
+    items_changed = items_changed + $3::int,
+    status = CASE WHEN fanout_sealed AND games_done + 1 >= games_total
+                  THEN CASE WHEN games_failed + $2::int > 0 THEN 'error' ELSE 'ok' END
+                  ELSE status END,
+    finished_at = CASE WHEN fanout_sealed AND games_done + 1 >= games_total THEN now() ELSE finished_at END
+WHERE id = $1 AND status = 'running'
+RETURNING (fanout_sealed AND games_done >= games_total)::boolean AS closed, games_failed, scope
+`
+
+type FinalizeSyncRunChildParams struct {
+	ID      pgtype.UUID
+	Failed  int32
+	Changed int32
+}
+
+type FinalizeSyncRunChildRow struct {
+	Closed      bool
+	GamesFailed int32
+	Scope       string
+}
+
+// Contabiliza o término (terminal) de UM job filho. Fecha o run quando o fan-out está selado e
+// todos os filhos terminaram. Devolve se fechou e o total de falhas (para o status da integração).
+func (q *Queries) FinalizeSyncRunChild(ctx context.Context, arg FinalizeSyncRunChildParams) (FinalizeSyncRunChildRow, error) {
+	row := q.db.QueryRow(ctx, finalizeSyncRunChild, arg.ID, arg.Failed, arg.Changed)
+	var i FinalizeSyncRunChildRow
+	err := row.Scan(&i.Closed, &i.GamesFailed, &i.Scope)
+	return i, err
+}
+
 const listSyncRuns = `-- name: ListSyncRuns :many
-SELECT id, integration_id, platform, scope, trigger, status, started_at, finished_at, items_changed, games_touched, error, created_at FROM sync_runs
+SELECT id, integration_id, platform, scope, trigger, status, started_at, finished_at, items_changed, games_touched, error, created_at, games_total, games_done, games_failed, fanout_sealed FROM sync_runs
 WHERE ($2::text IS NULL OR platform = $2::text)
 ORDER BY started_at DESC
 LIMIT $1
@@ -70,6 +106,10 @@ func (q *Queries) ListSyncRuns(ctx context.Context, arg ListSyncRunsParams) ([]S
 			&i.GamesTouched,
 			&i.Error,
 			&i.CreatedAt,
+			&i.GamesTotal,
+			&i.GamesDone,
+			&i.GamesFailed,
+			&i.FanoutSealed,
 		); err != nil {
 			return nil, err
 		}
@@ -81,10 +121,65 @@ func (q *Queries) ListSyncRuns(ctx context.Context, arg ListSyncRunsParams) ([]S
 	return items, nil
 }
 
+const reapStuckSyncRuns = `-- name: ReapStuckSyncRuns :execrows
+UPDATE sync_runs r
+SET status = 'error', finished_at = now(),
+    error = CASE WHEN r.error = '' THEN 'sync interrompido (worker reiniciou)' ELSE r.error END
+WHERE r.status = 'running'
+  AND r.started_at < now() - make_interval(mins => $1::int)
+  AND NOT EXISTS (
+      SELECT 1 FROM jobs j
+      WHERE j.status IN ('queued','running')
+        AND (j.payload->>'sync_run_id') = r.id::text
+  )
+`
+
+// Reaper: runs presos em 'running' há mais de N minutos SEM nenhum job vivo que os referencie
+// (worker reiniciou no meio) → marca 'error' (interrompido). Roda no boot e periodicamente.
+func (q *Queries) ReapStuckSyncRuns(ctx context.Context, olderThanMinutes int32) (int64, error) {
+	result, err := q.db.Exec(ctx, reapStuckSyncRuns, olderThanMinutes)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const sealSyncRun = `-- name: SealSyncRun :one
+UPDATE sync_runs
+SET games_total   = $2::int,
+    fanout_sealed = true,
+    status = CASE WHEN games_done >= $2::int
+                  THEN CASE WHEN games_failed > 0 THEN 'error' ELSE 'ok' END
+                  ELSE status END,
+    finished_at = CASE WHEN games_done >= $2::int THEN now() ELSE finished_at END
+WHERE id = $1 AND status = 'running'
+RETURNING (games_done >= games_total)::boolean AS closed, games_failed, scope
+`
+
+type SealSyncRunParams struct {
+	ID         pgtype.UUID
+	GamesTotal int32
+}
+
+type SealSyncRunRow struct {
+	Closed      bool
+	GamesFailed int32
+	Scope       string
+}
+
+// Fixa games_total e marca o fan-out concluído. Se todos os filhos já terminaram (corrida com
+// filhos rápidos), fecha o run aqui mesmo. Devolve se fechou e quantos jogos falharam.
+func (q *Queries) SealSyncRun(ctx context.Context, arg SealSyncRunParams) (SealSyncRunRow, error) {
+	row := q.db.QueryRow(ctx, sealSyncRun, arg.ID, arg.GamesTotal)
+	var i SealSyncRunRow
+	err := row.Scan(&i.Closed, &i.GamesFailed, &i.Scope)
+	return i, err
+}
+
 const startSyncRun = `-- name: StartSyncRun :one
-INSERT INTO sync_runs (integration_id, platform, scope, trigger, status)
-VALUES ($1, $2, $3, $4, 'running')
-RETURNING id, integration_id, platform, scope, trigger, status, started_at, finished_at, items_changed, games_touched, error, created_at
+INSERT INTO sync_runs (integration_id, platform, scope, trigger, status, games_total, fanout_sealed)
+VALUES ($1, $2, $3, $4, 'running', $5::int, $6::boolean)
+RETURNING id, integration_id, platform, scope, trigger, status, started_at, finished_at, items_changed, games_touched, error, created_at, games_total, games_done, games_failed, fanout_sealed
 `
 
 type StartSyncRunParams struct {
@@ -92,14 +187,20 @@ type StartSyncRunParams struct {
 	Platform      string
 	Scope         string
 	Trigger       string
+	GamesTotal    int32
+	Sealed        bool
 }
 
+// Cria o run (pai no fan-out, ou run único de um jogo). games_total/fanout_sealed já podem vir
+// preenchidos (run de jogo único: total=1, sealed=true); no fan-out de plataforma começam 0/false.
 func (q *Queries) StartSyncRun(ctx context.Context, arg StartSyncRunParams) (SyncRun, error) {
 	row := q.db.QueryRow(ctx, startSyncRun,
 		arg.IntegrationID,
 		arg.Platform,
 		arg.Scope,
 		arg.Trigger,
+		arg.GamesTotal,
+		arg.Sealed,
 	)
 	var i SyncRun
 	err := row.Scan(
@@ -115,6 +216,10 @@ func (q *Queries) StartSyncRun(ctx context.Context, arg StartSyncRunParams) (Syn
 		&i.GamesTouched,
 		&i.Error,
 		&i.CreatedAt,
+		&i.GamesTotal,
+		&i.GamesDone,
+		&i.GamesFailed,
+		&i.FanoutSealed,
 	)
 	return i, err
 }

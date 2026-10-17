@@ -34,7 +34,7 @@ scored AS (
 SELECT COUNT(*) FROM scored
 WHERE ($1::text IS NULL OR platform = $1::text)
   AND ($2::boolean IS NULL OR has_achievements = $2::boolean)
-  AND ($3::text IS NULL OR normalized_title ILIKE '%' || $3::text || '%')
+  AND ($3::text IS NULL OR normalized_title ILIKE '%' || $3::text || '%' ESCAPE '\')
   AND ($4::text IS NULL OR status_bucket = $4::text)
 `
 
@@ -160,7 +160,7 @@ scored AS (
 SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, total, earned, avg_remaining_rarity, remaining, completion_pct, status_bucket FROM scored
 WHERE ($1::text IS NULL OR platform = $1::text)
   AND ($2::boolean IS NULL OR has_achievements = $2::boolean)
-  AND ($3::text IS NULL OR normalized_title ILIKE '%' || $3::text || '%')
+  AND ($3::text IS NULL OR normalized_title ILIKE '%' || $3::text || '%' ESCAPE '\')
   AND ($4::text IS NULL OR status_bucket = $4::text)
 ORDER BY
     (CASE WHEN $5::text = 'title'      THEN normalized_title     END) ASC  NULLS LAST,
@@ -346,12 +346,28 @@ func (q *Queries) SetGameSchemaSynced(ctx context.Context, arg SetGameSchemaSync
 	return err
 }
 
-const upsertGame = `-- name: UpsertGame :one
+const setGameWatermark = `-- name: SetGameWatermark :exec
+UPDATE games SET remote_updated_at = $2, updated_at = now() WHERE id = $1
+`
+
+type SetGameWatermarkParams struct {
+	ID              pgtype.UUID
+	RemoteUpdatedAt pgtype.Timestamptz
+}
+
+// Grava a marca d'água do sync incremental (remote_updated_at) APÓS o sync de conquistas do jogo
+// ter sucesso. Ver UpsertGameIdentity.
+func (q *Queries) SetGameWatermark(ctx context.Context, arg SetGameWatermarkParams) error {
+	_, err := q.db.Exec(ctx, setGameWatermark, arg.ID, arg.RemoteUpdatedAt)
+	return err
+}
+
+const upsertGameIdentity = `-- name: UpsertGameIdentity :one
 INSERT INTO games (
     platform, external_id, np_service_name, title, normalized_title, icon, cover, platforms,
-    has_achievements, last_played_at, playtime_minutes, remote_updated_at, updated_at
+    has_achievements, last_played_at, playtime_minutes, updated_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now()
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now()
 )
 ON CONFLICT (platform, external_id) DO UPDATE SET
     np_service_name   = EXCLUDED.np_service_name,
@@ -360,15 +376,13 @@ ON CONFLICT (platform, external_id) DO UPDATE SET
     icon              = EXCLUDED.icon,
     cover             = EXCLUDED.cover,
     platforms         = EXCLUDED.platforms,
-    has_achievements  = EXCLUDED.has_achievements,
     last_played_at    = EXCLUDED.last_played_at,
     playtime_minutes  = EXCLUDED.playtime_minutes,
-    remote_updated_at = EXCLUDED.remote_updated_at,
     updated_at        = now()
 RETURNING id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at
 `
 
-type UpsertGameParams struct {
+type UpsertGameIdentityParams struct {
 	Platform        string
 	ExternalID      string
 	NpServiceName   *string
@@ -380,13 +394,22 @@ type UpsertGameParams struct {
 	HasAchievements bool
 	LastPlayedAt    pgtype.Timestamptz
 	PlaytimeMinutes int32
-	RemoteUpdatedAt pgtype.Timestamptz
 }
 
-// Insere/atualiza a definição e os dados remotos do jogo, preservando campos do usuário
-// (abandoned, priority, notes, tags, unified_game_id).
-func (q *Queries) UpsertGame(ctx context.Context, arg UpsertGameParams) (Game, error) {
-	row := q.db.QueryRow(ctx, upsertGame,
+// Upserta a IDENTIDADE e os campos de EXIBIÇÃO do jogo (title, icon, cover, playtime, last_played),
+// preservando campos do usuário (abandoned, priority, notes, tags, unified_game_id).
+//
+// NÃO sobrescreve, no conflito:
+//   - has_achievements: quem decide é o sync de schema (true só quando há conquistas; ver
+//     SetGameHasAchievements). Isso evita voltar has_achievements para true via has_community_visible
+//     depois de um schema vazio/ErrNoStats o ter zerado.
+//   - remote_updated_at: é a MARCA D'ÁGUA do sync incremental, gravada só APÓS as conquistas do
+//     jogo sincronizarem com sucesso (SetGameWatermark). Um jogo que falhou mantém a marca antiga
+//     e é re-sincronizado no próximo incremental.
+//
+// Em INSERT (jogo novo), has_achievements vem do parâmetro (has_community_visible_stats).
+func (q *Queries) UpsertGameIdentity(ctx context.Context, arg UpsertGameIdentityParams) (Game, error) {
+	row := q.db.QueryRow(ctx, upsertGameIdentity,
 		arg.Platform,
 		arg.ExternalID,
 		arg.NpServiceName,
@@ -398,7 +421,6 @@ func (q *Queries) UpsertGame(ctx context.Context, arg UpsertGameParams) (Game, e
 		arg.HasAchievements,
 		arg.LastPlayedAt,
 		arg.PlaytimeMinutes,
-		arg.RemoteUpdatedAt,
 	)
 	var i Game
 	err := row.Scan(

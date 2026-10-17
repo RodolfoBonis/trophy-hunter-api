@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -12,6 +13,9 @@ import (
 
 // schedulerLockKey é a chave do lock de agendamento (uma réplica agenda por tick).
 const schedulerLockKey = "trophy:scheduler:lock"
+
+// initialPassDelay é o atraso do primeiro agendamento após o boot (não espera um intervalo inteiro).
+const initialPassDelay = time.Minute
 
 // Scheduler dispara, periodicamente, syncs incrementais para as integrações conectadas.
 //
@@ -30,11 +34,22 @@ func NewScheduler(syncer *Syncer, rdb *redis.Client, q *dbgen.Queries, interval 
 	return &Scheduler{syncer: syncer, redis: rdb, q: q, interval: interval, logger: logger}
 }
 
-// Run roda até ctx cancelar, agendando a cada interval.
+// Run roda até ctx cancelar. Faz uma passada inicial ~1min após o boot e depois a cada interval
+// (finding 21): o sync não espera um intervalo inteiro para rodar pela primeira vez.
 func (s *Scheduler) Run(ctx context.Context) {
+	s.logger.Info("scheduler iniciado", slog.Duration("interval", s.interval))
+
+	initial := time.NewTimer(initialPassDelay)
+	defer initial.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-initial.C:
+		s.tick(ctx)
+	}
+
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
-	s.logger.Info("scheduler iniciado", slog.Duration("interval", s.interval))
 	for {
 		select {
 		case <-ctx.Done():
@@ -58,10 +73,14 @@ func (s *Scheduler) tick(ctx context.Context) {
 		if i.Status == "disabled" {
 			continue
 		}
-		if _, enq, err := s.syncer.EnqueuePlatformSync(ctx, i.Platform, ScopeIncremental, TriggerSchedule); err != nil {
+		_, enq, err := s.syncer.EnqueuePlatformSync(ctx, i.Platform, ScopeIncremental, TriggerSchedule)
+		switch {
+		case errors.Is(err, ErrNotConnected):
+			// integração sem credenciais ainda; ignora.
+		case err != nil:
 			s.logger.Error("scheduler: enfileirar sync falhou",
 				slog.String("platform", i.Platform), slog.String("err", err.Error()))
-		} else if enq {
+		case enq:
 			s.logger.Info("sync incremental agendado", slog.String("platform", i.Platform))
 		}
 	}

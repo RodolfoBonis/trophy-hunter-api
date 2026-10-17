@@ -15,7 +15,9 @@ import (
 
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steam"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/db"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/metrics"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
 )
 
 const (
@@ -23,156 +25,218 @@ const (
 	coverURLFmt = "https://cdn.akamai.steamstatic.com/steam/apps/%d/library_600x900.jpg"
 )
 
-// syncSteam executa uma sincronização Steam, registrando o sync_run e ajustando o status da
-// integração. singleGameID != "" restringe a um único jogo (scope game).
-func (s *Syncer) syncSteam(ctx context.Context, scope, trigger, singleGameID string) error {
+// handlePlatform executa a etapa de fan-out: lista a biblioteca, upserta as identidades e emite um
+// sync_game por jogo que precisa de trabalho, selando o run pai ao final.
+func (s *Syncer) handlePlatform(ctx context.Context, p PlatformPayload) error {
+	runID, err := parseUUID(p.SyncRunID)
+	if err != nil {
+		return fmt.Errorf("sync_run_id inválido: %w", err)
+	}
+
+	if p.Platform != "steam" {
+		s.logger.Warn("plataforma ainda não suportada no sync", slog.String("platform", p.Platform))
+		s.closeEmptyRun(ctx, runID)
+		return nil
+	}
+
 	integ, client, creds, err := s.loadSteam(ctx)
 	if errors.Is(err, ErrNotConnected) {
 		s.logger.Info("sync steam ignorado: integração não conectada")
+		s.failRun(ctx, runID, "integração não conectada")
 		return nil
 	}
 	if err != nil {
-		return err
+		s.failRun(ctx, runID, "erro interno ao carregar integração")
+		return queue.Permanent(err)
 	}
 
-	run, err := s.q.StartSyncRun(ctx, dbgen.StartSyncRunParams{
-		IntegrationID: integ.ID, Platform: "steam", Scope: scope, Trigger: trigger,
-	})
-	if err != nil {
-		return fmt.Errorf("iniciar sync_run: %w", err)
-	}
-
-	changed, touched, syncErr := s.runSteam(ctx, integ, client, creds, scope, singleGameID)
-
-	status, errMsg := "ok", ""
-	if syncErr != nil {
-		status, errMsg = "error", syncErr.Error()
-	}
-	if ferr := s.q.FinishSyncRun(ctx, dbgen.FinishSyncRunParams{
-		ID: run.ID, Status: status,
-		ItemsChanged: int32(changed), GamesTouched: int32(touched), //nolint:gosec // contagens pequenas
-		Error: truncateErr(errMsg),
-	}); ferr != nil {
-		s.logger.Error("falha ao finalizar sync_run", slog.String("err", ferr.Error()))
-	}
-	metrics.SyncRun(scope, status)
-
-	if syncErr != nil {
-		s.applyErrorStatus(ctx, syncErr)
-		return syncErr
-	}
-
-	if err := s.q.MarkIntegrationSynced(ctx, dbgen.MarkIntegrationSyncedParams{
-		Platform: "steam", MarkInitial: scope == ScopeFull,
-	}); err != nil {
-		return fmt.Errorf("marcar sincronizado: %w", err)
-	}
-	s.setStatus("steam", "connected")
-	return nil
-}
-
-// applyErrorStatus traduz o erro do sync num status de integração + métrica.
-func (s *Syncer) applyErrorStatus(ctx context.Context, syncErr error) {
-	status, msg := "error", syncErr.Error()
-	switch {
-	case errors.Is(syncErr, steam.ErrProfilePrivate):
-		status, msg = "error_private", "perfil Steam não é público"
-	case errors.Is(syncErr, steam.ErrInvalidKey):
-		status, msg = "error", "API key Steam inválida"
-	}
-	if err := s.q.UpdateIntegrationStatus(ctx, dbgen.UpdateIntegrationStatusParams{
-		Platform: "steam", Status: status, LastError: truncateErr(msg),
-	}); err != nil {
-		s.logger.Error("falha ao atualizar status da integração", slog.String("err", err.Error()))
-	}
-	s.setStatus("steam", status)
-}
-
-// runSteam percorre a biblioteca e sincroniza cada jogo conforme o escopo. Devolve o total de
-// troféus alterados e de jogos tocados.
-func (s *Syncer) runSteam(ctx context.Context, integ dbgen.Integration, client SteamAPI, creds steamCredentials, scope, singleGameID string) (changed, touched int, err error) {
 	owned, err := client.GetOwnedGames(ctx, creds.SteamID)
 	if err != nil {
-		return 0, 0, fmt.Errorf("owned games: %w", err)
-	}
-	createEvents := integ.InitialSyncDone // eventos só após o full sync inicial
-
-	onlyAppID := -1
-	if singleGameID != "" {
-		id, perr := parseUUID(singleGameID)
-		if perr != nil {
-			return 0, 0, fmt.Errorf("game id inválido: %w", perr)
-		}
-		g, gerr := s.q.GetGameByID(ctx, id)
-		if gerr != nil {
-			return 0, 0, fmt.Errorf("jogo não encontrado: %w", gerr)
-		}
-		onlyAppID, _ = strconv.Atoi(g.ExternalID)
+		s.failPlatform(ctx, runID, err)
+		return queue.Permanent(err) // o cliente já retentou 429/5xx; não rodar retry de job em cima
 	}
 
+	if len(owned) == 0 {
+		// Perfil privado devolve {"response":{}} → biblioteca "vazia". Confirme a visibilidade antes
+		// de concluir, para não marcar initial_sync_done nem voltar a status connected (finding 6).
+		summary, serr := client.GetPlayerSummary(ctx, creds.SteamID)
+		if serr != nil {
+			s.failPlatform(ctx, runID, serr)
+			return queue.Permanent(serr)
+		}
+		if !summary.IsPublic() {
+			s.setPermanentStatus(ctx, "steam", steam.ErrProfilePrivate)
+			s.failRun(ctx, runID, "perfil Steam não é público")
+			return queue.Permanent(steam.ErrProfilePrivate)
+		}
+		s.sealAndMaybeClose(ctx, runID, 0, p.Scope) // biblioteca pública genuinamente vazia
+		return nil
+	}
+
+	createEvents := integ.InitialSyncDone
+	total := 0
 	for _, og := range owned {
-		if onlyAppID >= 0 && og.AppID != onlyAppID {
-			continue
-		}
-
 		prior, priorErr := s.q.GetGameByExternal(ctx, dbgen.GetGameByExternalParams{
 			Platform: "steam", ExternalID: strconv.Itoa(og.AppID),
 		})
 		isNew := errors.Is(priorErr, pgx.ErrNoRows)
 		if priorErr != nil && !isNew {
-			return changed, touched, fmt.Errorf("carregar jogo: %w", priorErr)
+			s.failPlatform(ctx, runID, priorErr)
+			return queue.Permanent(fmt.Errorf("carregar jogo: %w", priorErr))
 		}
 
-		gameChanged := isNew || remoteChanged(prior, og)
-		hasStats := og.HasCommunityVisibleStats
-
-		gameRow, uerr := s.upsertGame(ctx, og, hasStats)
+		gameRow, uerr := s.upsertGameIdentity(ctx, og)
 		if uerr != nil {
-			return changed, touched, fmt.Errorf("upsert jogo: %w", uerr)
-		}
-		touched++
-
-		if !hasStats {
-			continue // sem estatísticas visíveis: sem troféus a buscar
+			s.failPlatform(ctx, runID, uerr)
+			return queue.Permanent(fmt.Errorf("upsert jogo: %w", uerr))
 		}
 
-		fetchSchema, fetchAch, fetchPct := s.decideFetches(scope, isNew, gameChanged, prior)
-		if !fetchSchema && !fetchAch && !fetchPct {
+		if !og.HasCommunityVisibleStats {
+			// Sem conquistas visíveis: não há filho; grava a marca d'água para não re-detectar sempre.
+			if werr := s.q.SetGameWatermark(ctx, dbgen.SetGameWatermarkParams{
+				ID: gameRow.ID, RemoteUpdatedAt: tsFromUnix(og.RtimeLastPlayed),
+			}); werr != nil {
+				s.logger.Warn("falha ao gravar marca d'água (sem stats)", slog.String("err", werr.Error()))
+			}
 			continue
 		}
 
-		n, gerr := s.syncGameTrophies(ctx, client, creds.SteamID, gameRow, fetchSchema, fetchAch, fetchPct, createEvents)
-		switch {
-		case gerr == nil:
-			changed += n
-		case errors.Is(gerr, steam.ErrProfilePrivate), errors.Is(gerr, steam.ErrInvalidKey):
-			return changed, touched, gerr // fatais: abortam o sync inteiro
-		case errors.Is(gerr, steam.ErrNoStats):
-			if herr := s.q.SetGameHasAchievements(ctx, dbgen.SetGameHasAchievementsParams{ID: gameRow.ID, HasAchievements: false}); herr != nil {
-				s.logger.Warn("falha ao marcar sem conquistas", slog.String("err", herr.Error()))
-			}
-		default:
-			// Erro por jogo (ex.: schema indisponível): loga e segue.
-			s.logger.Warn("falha ao sincronizar jogo",
-				slog.Int("appid", og.AppID), slog.String("err", gerr.Error()))
+		need := p.Scope == ScopeFull || isNew || remoteChanged(prior, og)
+		if !need {
+			continue
+		}
+
+		_, enq, eerr := s.queue.Enqueue(ctx, queue.EnqueueParams{
+			Kind: KindSyncGame,
+			Payload: GamePayload{
+				GameID: uuidStr(gameRow.ID), Trigger: p.Trigger, Scope: p.Scope,
+				SyncRunID: p.SyncRunID, CreateEvents: createEvents,
+				HasSnapshot: true, AppID: og.AppID, Playtime: og.PlaytimeForever,
+				Rtime: og.RtimeLastPlayed, HasStats: true,
+			},
+			DedupeKey: fmt.Sprintf("%s:%s", KindSyncGame, uuidStr(gameRow.ID)),
+		})
+		if eerr != nil {
+			s.failPlatform(ctx, runID, eerr)
+			return queue.Permanent(fmt.Errorf("enfileirar sync_game: %w", eerr))
+		}
+		if enq {
+			total++
 		}
 	}
-	return changed, touched, nil
+
+	s.sealAndMaybeClose(ctx, runID, total, p.Scope)
+	return nil
 }
 
-// decideFetches resolve o que buscar para um jogo conforme o escopo e a idade dos dados.
-func (s *Syncer) decideFetches(scope string, isNew, gameChanged bool, prior dbgen.Game) (schema, ach, pct bool) {
-	switch scope {
-	case ScopeFull:
-		return true, true, true
-	case ScopeGame:
-		return isNew || olderThan(prior.SchemaSyncedAt, schemaMaxAge), true, true
-	default: // incremental
-		ach = gameChanged
-		schema = gameChanged && (isNew || olderThan(prior.SchemaSyncedAt, schemaMaxAge))
-		pct = gameChanged && olderThan(prior.PercentagesSyncedAt, percentagesMaxAge)
-		return schema, ach, pct
+// handleGame sincroniza UM jogo (filho do fan-out ou run manual) e contabiliza o término no run.
+func (s *Syncer) handleGame(ctx context.Context, job queue.Job, p GamePayload) error {
+	runID, err := parseUUID(p.SyncRunID)
+	if err != nil {
+		return fmt.Errorf("sync_run_id inválido: %w", err)
 	}
+
+	integ, client, creds, err := s.loadSteam(ctx)
+	if errors.Is(err, ErrNotConnected) {
+		s.finalizeChild(ctx, runID, true, 0, "steam")
+		return nil
+	}
+	if err != nil {
+		return s.gameTransient(ctx, job, runID, "steam", err)
+	}
+	_ = integ
+
+	gameUUID, err := parseUUID(p.GameID)
+	if err != nil {
+		s.finalizeChild(ctx, runID, true, 0, "steam")
+		return nil
+	}
+	game, err := s.q.GetGameByID(ctx, gameUUID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			s.finalizeChild(ctx, runID, true, 0, "steam")
+			return nil
+		}
+		return s.gameTransient(ctx, job, runID, "steam", fmt.Errorf("carregar jogo: %w", err))
+	}
+
+	appID := p.AppID
+	if appID == 0 {
+		appID, _ = strconv.Atoi(game.ExternalID)
+	}
+
+	rtime := p.Rtime
+	hasStats := p.HasStats
+	if !p.HasSnapshot {
+		// Sync manual: busca o owned-games para obter o estado remoto (marca d'água) e has_stats.
+		owned, oerr := client.GetOwnedGames(ctx, creds.SteamID)
+		if oerr != nil {
+			return s.gameTransient(ctx, job, runID, "steam", oerr)
+		}
+		found := false
+		for _, og := range owned {
+			if og.AppID == appID {
+				rtime, hasStats, found = og.RtimeLastPlayed, og.HasCommunityVisibleStats, true
+				break
+			}
+		}
+		if !found {
+			s.finalizeChild(ctx, runID, false, 0, "steam") // não está mais na biblioteca
+			return nil
+		}
+	}
+
+	if !hasStats {
+		if herr := s.q.SetGameHasAchievements(ctx, dbgen.SetGameHasAchievementsParams{ID: game.ID, HasAchievements: false}); herr != nil {
+			s.logger.Warn("falha ao marcar sem conquistas", slog.String("err", herr.Error()))
+		}
+		s.setWatermark(ctx, game.ID, rtime)
+		s.finalizeChild(ctx, runID, false, 0, "steam")
+		return nil
+	}
+
+	fetchSchema, fetchAch, fetchPct := decideFetchesChild(p.Scope, game)
+	changed, gerr := s.syncGameTrophies(ctx, client, creds.SteamID, game, fetchSchema, fetchAch, fetchPct, p.CreateEvents)
+	switch {
+	case gerr == nil:
+		s.setWatermark(ctx, game.ID, rtime) // marca d'água SÓ após sucesso (finding 5)
+		s.finalizeChild(ctx, runID, false, changed, "steam")
+		return nil
+	case errors.Is(gerr, steam.ErrNoStats):
+		if herr := s.q.SetGameHasAchievements(ctx, dbgen.SetGameHasAchievementsParams{ID: game.ID, HasAchievements: false}); herr != nil {
+			s.logger.Warn("falha ao marcar sem conquistas", slog.String("err", herr.Error()))
+		}
+		s.setWatermark(ctx, game.ID, rtime)
+		s.finalizeChild(ctx, runID, false, changed, "steam")
+		return nil
+	case errors.Is(gerr, steam.ErrProfilePrivate), errors.Is(gerr, steam.ErrInvalidKey):
+		s.setPermanentStatus(ctx, "steam", gerr) // permanente: status já, job morre imediatamente
+		s.finalizeChild(ctx, runID, true, changed, "steam")
+		return queue.Permanent(gerr)
+	default:
+		return s.gameTransient(ctx, job, runID, "steam", gerr)
+	}
+}
+
+// gameTransient trata um erro transitório por jogo: re-tenta enquanto houver tentativas; na última
+// (job já virará dead) contabiliza a falha e só então marca a integração em erro (finding 9).
+func (s *Syncer) gameTransient(ctx context.Context, job queue.Job, runID pgtype.UUID, platform string, cause error) error {
+	if job.Attempts >= job.MaxAttempts {
+		s.finalizeChild(ctx, runID, true, 0, platform)
+		s.setTransientErrorStatus(ctx, platform, cause)
+		return cause
+	}
+	s.logger.Warn("falha transitória ao sincronizar jogo; vai re-tentar",
+		slog.String("job_id", job.ID), slog.String("err", cause.Error()))
+	return cause
+}
+
+// decideFetchesChild resolve o que buscar para o jogo conforme o escopo e a idade dos dados.
+func decideFetchesChild(scope string, game dbgen.Game) (schema, ach, pct bool) {
+	ach = true // o filho existe justamente para sincronizar conquistas
+	schema = scope == ScopeFull || olderThan(game.SchemaSyncedAt, schemaMaxAge)
+	pct = scope == ScopeFull || olderThan(game.PercentagesSyncedAt, percentagesMaxAge)
+	return schema, ach, pct
 }
 
 // syncGameTrophies busca schema/conquistas/raridade de um jogo e aplica o diff.
@@ -185,6 +249,7 @@ func (s *Syncer) syncGameTrophies(ctx context.Context, client SteamAPI, steamID 
 			return 0, serr
 		}
 		if len(defs) == 0 {
+			// Schema vazio: o jogo não tem conquistas. Preserva has_achievements=false (finding 18).
 			if herr := s.q.SetGameHasAchievements(ctx, dbgen.SetGameHasAchievementsParams{ID: game.ID, HasAchievements: false}); herr != nil {
 				return 0, herr
 			}
@@ -205,9 +270,12 @@ func (s *Syncer) syncGameTrophies(ctx context.Context, client SteamAPI, steamID 
 				return 0, fmt.Errorf("upsert definição: %w", derr)
 			}
 		}
-		// Steam não tem platina.
+		// Schema tem conquistas → has_achievements=true. Steam não tem platina.
 		if serr := s.q.SetGameSchemaSynced(ctx, dbgen.SetGameSchemaSyncedParams{ID: game.ID, HasPlatinum: false}); serr != nil {
 			return 0, serr
+		}
+		if herr := s.q.SetGameHasAchievements(ctx, dbgen.SetGameHasAchievementsParams{ID: game.ID, HasAchievements: true}); herr != nil {
+			return 0, herr
 		}
 	}
 
@@ -228,25 +296,20 @@ func (s *Syncer) syncGameTrophies(ctx context.Context, client SteamAPI, steamID 
 		}
 		for _, a := range achs {
 			t, ok := byExt[a.APIName]
-			if !ok {
-				continue
-			}
-			if a.Achieved == t.Earned {
+			if !ok || a.Achieved == t.Earned {
 				continue
 			}
 			var earnedAt pgtype.Timestamptz
 			if a.Achieved {
 				earnedAt = tsFromUnix(a.UnlockTime)
 			}
-			if serr := s.q.SetTrophyEarned(ctx, dbgen.SetTrophyEarnedParams{ID: t.ID, Earned: a.Achieved, EarnedAt: earnedAt}); serr != nil {
-				return changed, fmt.Errorf("set earned: %w", serr)
+			// SetTrophyEarned + InsertUnlockEvent na MESMA transação (finding 18): ou os dois
+			// efeitos acontecem, ou nenhum — nunca um troféu "earned" sem o evento (ou vice-versa).
+			emitEvent := a.Achieved && !t.Earned && createEvents
+			if terr := s.applyEarned(ctx, t.ID, a.Achieved, earnedAt, emitEvent); terr != nil {
+				return changed, fmt.Errorf("aplicar earned: %w", terr)
 			}
 			changed++
-			if a.Achieved && !t.Earned && createEvents {
-				if ierr := s.q.InsertUnlockEvent(ctx, t.ID); ierr != nil {
-					s.logger.Warn("falha ao inserir unlock_event", slog.String("err", ierr.Error()))
-				}
-			}
 		}
 	}
 
@@ -256,8 +319,8 @@ func (s *Syncer) syncGameTrophies(ctx context.Context, client SteamAPI, steamID 
 			s.logger.Warn("falha ao buscar raridade global", slog.Int("appid", appID), slog.String("err", perr.Error()))
 		} else {
 			for ext, t := range byExt {
-				if p, ok := pct[ext]; ok {
-					val := p
+				if pv, ok := pct[ext]; ok {
+					val := pv
 					if serr := s.q.SetTrophyRarity(ctx, dbgen.SetTrophyRarityParams{ID: t.ID, RarityPct: &val}); serr != nil {
 						return changed, fmt.Errorf("set rarity: %w", serr)
 					}
@@ -272,33 +335,173 @@ func (s *Syncer) syncGameTrophies(ctx context.Context, client SteamAPI, steamID 
 	return changed, nil
 }
 
-// upsertGame insere/atualiza um jogo Steam a partir do item de GetOwnedGames.
-func (s *Syncer) upsertGame(ctx context.Context, og steam.OwnedGame, hasStats bool) (dbgen.Game, error) {
+// applyEarned grava o earned e, quando emitEvent, insere o unlock_event na mesma transação.
+func (s *Syncer) applyEarned(ctx context.Context, trophyID pgtype.UUID, achieved bool, earnedAt pgtype.Timestamptz, emitEvent bool) error {
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		q := s.q.WithTx(tx)
+		if err := q.SetTrophyEarned(ctx, dbgen.SetTrophyEarnedParams{ID: trophyID, Earned: achieved, EarnedAt: earnedAt}); err != nil {
+			return err
+		}
+		if emitEvent {
+			if err := q.InsertUnlockEvent(ctx, trophyID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// upsertGameIdentity insere/atualiza identidade + exibição de um jogo Steam (sem tocar na marca
+// d'água nem reverter has_achievements — ver UpsertGameIdentity).
+func (s *Syncer) upsertGameIdentity(ctx context.Context, og steam.OwnedGame) (dbgen.Game, error) {
 	icon := ""
 	if og.ImgIconURL != "" {
 		icon = fmt.Sprintf(iconURLFmt, og.AppID, og.ImgIconURL)
 	}
-	return s.q.UpsertGame(ctx, dbgen.UpsertGameParams{
+	return s.q.UpsertGameIdentity(ctx, dbgen.UpsertGameIdentityParams{
 		Platform:        "steam",
 		ExternalID:      strconv.Itoa(og.AppID),
 		NpServiceName:   nil,
 		Title:           og.Name,
-		NormalizedTitle: normalizeTitle(og.Name),
+		NormalizedTitle: NormalizeTitle(og.Name),
 		Icon:            icon,
 		Cover:           fmt.Sprintf(coverURLFmt, og.AppID),
 		Platforms:       []string{},
-		HasAchievements: hasStats,
+		HasAchievements: og.HasCommunityVisibleStats, // só vale p/ INSERT; no conflito é preservado
 		LastPlayedAt:    tsFromUnix(og.RtimeLastPlayed),
 		PlaytimeMinutes: int32(og.PlaytimeForever), //nolint:gosec // playtime em minutos cabe em int32
-		RemoteUpdatedAt: tsFromUnix(og.RtimeLastPlayed),
 	})
 }
 
-// remoteChanged indica se o estado remoto (playtime/último jogado) mudou desde o último sync.
-func remoteChanged(prior dbgen.Game, og steam.OwnedGame) bool {
-	if int(prior.PlaytimeMinutes) != og.PlaytimeForever {
-		return true
+// --- bookkeeping do run / integração (roda em contexto desacoplado do cancelamento do job) ---
+
+func (s *Syncer) setWatermark(ctx context.Context, gameID pgtype.UUID, rtime int64) {
+	if err := s.q.SetGameWatermark(ctx, dbgen.SetGameWatermarkParams{ID: gameID, RemoteUpdatedAt: tsFromUnix(rtime)}); err != nil {
+		s.logger.Warn("falha ao gravar marca d'água", slog.String("err", err.Error()))
 	}
+}
+
+func (s *Syncer) sealAndMaybeClose(ctx context.Context, runID pgtype.UUID, total int, scope string) {
+	bgctx, cancel := bg(ctx)
+	defer cancel()
+	row, err := s.q.SealSyncRun(bgctx, dbgen.SealSyncRunParams{ID: runID, GamesTotal: int32(total)}) //nolint:gosec // total pequeno
+	if err != nil {
+		s.logger.Error("falha ao selar sync_run", slog.String("err", err.Error()))
+		return
+	}
+	s.logger.Info("fan-out selado", slog.String("scope", scope), slog.Int("games_total", total))
+	if row.Closed {
+		s.onRunClose(bgctx, "steam", row.Scope, row.GamesFailed)
+	}
+}
+
+func (s *Syncer) finalizeChild(ctx context.Context, runID pgtype.UUID, failed bool, changed int, platform string) {
+	bgctx, cancel := bg(ctx)
+	defer cancel()
+	failedN := int32(0)
+	if failed {
+		failedN = 1
+	}
+	row, err := s.q.FinalizeSyncRunChild(bgctx, dbgen.FinalizeSyncRunChildParams{
+		ID: runID, Failed: failedN, Changed: int32(changed), //nolint:gosec // contagens pequenas
+	})
+	if err != nil {
+		s.logger.Error("falha ao finalizar filho do sync_run", slog.String("err", err.Error()))
+		return
+	}
+	if row.Closed {
+		s.onRunClose(bgctx, platform, row.Scope, row.GamesFailed)
+	}
+}
+
+// onRunClose roda uma única vez por run (quem observa closed==true) e reflete o resultado na
+// integração e na métrica.
+func (s *Syncer) onRunClose(ctx context.Context, platform, scope string, gamesFailed int32) {
+	if gamesFailed == 0 {
+		metrics.SyncRun(scope, "ok")
+		if err := s.q.MarkIntegrationSynced(ctx, dbgen.MarkIntegrationSyncedParams{
+			Platform: platform, MarkInitial: scope == ScopeFull,
+		}); err != nil {
+			s.logger.Error("falha ao marcar integração sincronizada", slog.String("err", err.Error()))
+			return
+		}
+		s.setStatus(platform, "connected")
+		return
+	}
+	metrics.SyncRun(scope, "error")
+	// Falhas: só atualiza last_synced_at; o status de erro foi definido pelos filhos mortos.
+	if err := s.q.TouchIntegrationSynced(ctx, platform); err != nil {
+		s.logger.Error("falha ao tocar last_synced_at", slog.String("err", err.Error()))
+	}
+}
+
+func (s *Syncer) closeEmptyRun(ctx context.Context, runID pgtype.UUID) {
+	bgctx, cancel := bg(ctx)
+	defer cancel()
+	if _, err := s.q.SealSyncRun(bgctx, dbgen.SealSyncRunParams{ID: runID, GamesTotal: 0}); err != nil {
+		s.logger.Warn("falha ao fechar run vazio", slog.String("err", err.Error()))
+	}
+}
+
+func (s *Syncer) failRun(ctx context.Context, runID pgtype.UUID, msg string) {
+	bgctx, cancel := bg(ctx)
+	defer cancel()
+	if err := s.q.FailSyncRun(bgctx, dbgen.FailSyncRunParams{ID: runID, Error: truncateErr(msg)}); err != nil {
+		s.logger.Warn("falha ao marcar sync_run com erro", slog.String("err", err.Error()))
+	}
+}
+
+// failPlatform fecha o run com erro e reflete o erro na integração (permanente ou transitório).
+func (s *Syncer) failPlatform(ctx context.Context, runID pgtype.UUID, cause error) {
+	msg := "falha ao listar biblioteca Steam"
+	switch {
+	case errors.Is(cause, steam.ErrProfilePrivate):
+		s.setPermanentStatus(ctx, "steam", cause)
+		msg = "perfil Steam não é público"
+	case errors.Is(cause, steam.ErrInvalidKey):
+		s.setPermanentStatus(ctx, "steam", cause)
+		msg = "API key Steam inválida ou sem permissão"
+	default:
+		s.setTransientErrorStatus(ctx, "steam", cause)
+	}
+	s.failRun(ctx, runID, msg)
+}
+
+// setPermanentStatus define o status de erro definitivo da integração com mensagem sanitizada.
+func (s *Syncer) setPermanentStatus(ctx context.Context, platform string, cause error) {
+	status, msg := "error", "erro ao sincronizar"
+	switch {
+	case errors.Is(cause, steam.ErrProfilePrivate):
+		status, msg = "error_private", "perfil Steam não é público"
+	case errors.Is(cause, steam.ErrInvalidKey):
+		status, msg = "error", "API key Steam inválida ou sem permissão"
+	}
+	s.applyIntegrationStatus(ctx, platform, status, msg)
+}
+
+// setTransientErrorStatus marca a integração em erro (chamado só quando o job já morreu).
+func (s *Syncer) setTransientErrorStatus(ctx context.Context, platform string, _ error) {
+	s.applyIntegrationStatus(ctx, platform, "error", "falha ao sincronizar; tente novamente")
+}
+
+func (s *Syncer) applyIntegrationStatus(ctx context.Context, platform, status, msg string) {
+	bgctx, cancel := bg(ctx)
+	defer cancel()
+	if err := s.q.UpdateIntegrationStatus(ctx, dbgen.UpdateIntegrationStatusParams{
+		Platform: platform, Status: status, LastError: truncateErr(msg),
+	}); err != nil {
+		// tenta de novo no contexto desacoplado
+		if err2 := s.q.UpdateIntegrationStatus(bgctx, dbgen.UpdateIntegrationStatusParams{
+			Platform: platform, Status: status, LastError: truncateErr(msg),
+		}); err2 != nil {
+			s.logger.Error("falha ao atualizar status da integração", slog.String("err", err2.Error()))
+		}
+	}
+	s.setStatus(platform, status)
+}
+
+// remoteChanged indica se a marca d'água (remote_updated_at) difere do rtime remoto atual.
+func remoteChanged(prior dbgen.Game, og steam.OwnedGame) bool {
 	newRt := tsFromUnix(og.RtimeLastPlayed)
 	if prior.RemoteUpdatedAt.Valid != newRt.Valid {
 		return true
@@ -324,8 +527,9 @@ var (
 	editionWordRe = regexp.MustCompile(`\b(remastered|remaster|goty|game of the year|definitive|deluxe|complete|enhanced|ps5|ps4|edition)\b`)
 )
 
-// normalizeTitle normaliza um título para busca/unificação (lower, sem símbolos/edições/pontuação).
-func normalizeTitle(s string) string {
+// NormalizeTitle normaliza um título para busca/unificação (lower, sem símbolos/edições/pontuação).
+// Exportada para a busca da biblioteca usar a MESMA normalização de normalized_title (finding 19).
+func NormalizeTitle(s string) string {
 	s = strings.ToLower(s)
 	s = trademarkRe.ReplaceAllString(s, "")
 	s = editionWordRe.ReplaceAllString(s, " ")
@@ -334,10 +538,21 @@ func normalizeTitle(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// EscapeLike escapa %, _ e \ para uso seguro em padrões ILIKE (ESCAPE '\'). Defensivo: após
+// NormalizeTitle não restam esses caracteres, mas mantém a query robusta a qualquer entrada.
+func EscapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
+}
+
 func truncateErr(s string) string {
 	const n = 1000
 	if len(s) <= n {
 		return s
 	}
-	return s[:n]
+	cut := n
+	for cut > 0 && (s[cut]&0xC0) == 0x80 {
+		cut--
+	}
+	return s[:cut]
 }

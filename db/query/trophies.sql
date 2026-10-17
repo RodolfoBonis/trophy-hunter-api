@@ -39,4 +39,6 @@ UPDATE trophies SET rarity_pct = $2, updated_at = now() WHERE id = $1;
 SELECT * FROM trophies WHERE game_id = $1 ORDER BY type, name;
 
 -- name: InsertUnlockEvent :exec
-INSERT INTO unlock_events (trophy_id, detected_at) VALUES ($1, now());
+-- No máximo UM evento por troféu (uq_unlock_events_trophy); re-detecções do diff não duplicam.
+INSERT INTO unlock_events (trophy_id, detected_at) VALUES ($1, now())
+ON CONFLICT (trophy_id) DO NOTHING;

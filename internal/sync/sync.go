@@ -1,12 +1,18 @@
 // Package sync coordena a sincronização de bibliotecas e conquistas com as plataformas.
 //
-// Papéis:
-//   - Connect*: valida credenciais, grava cifrado e enfileira o full sync inicial.
-//   - Enqueue*: enfileira jobs de sync (plataforma/jogo) com dedupe.
-//   - HandleJob: executado pelo worker; despacha o job para o syncer da plataforma.
+// Modelo de fan-out (cabe no orçamento por job mesmo com rate limit baixo):
+//   - sync_platform: lista a biblioteca (1 chamada), upserta a IDENTIDADE dos jogos e emite UM
+//     job sync_game por jogo que precisa de trabalho. Cria o sync_run PAI e, ao terminar o
+//     fan-out, o sela (fixa games_total). Não toca em conquistas.
+//   - sync_game: sincroniza schema/conquistas/raridade de UM jogo; ao terminar (terminal) atualiza
+//     os contadores do run pai. O último filho a terminar fecha o run (barreira fanout_sealed +
+//     games_done>=games_total).
+//   - O "sync de jogo" manual reaproveita o kind sync_game (com um run próprio scope=game).
 //
 // O diff de conquistas só gera unlock_events DEPOIS que o full sync inicial da integração
-// terminou (integrations.initial_sync_done). O sync inicial popula o estado sem gerar eventos.
+// terminou (integrations.initial_sync_done). initial_sync_done só liga quando o full inicial fecha
+// com ZERO jogos falhos. A marca d'água do incremental (remote_updated_at) só é gravada APÓS o
+// sync de conquistas do jogo ter sucesso — um jogo que falhou é re-tentado no próximo incremental.
 package sync
 
 import (
@@ -50,6 +56,10 @@ const (
 	percentagesMaxAge = 24 * time.Hour
 )
 
+// bgTimeout é o teto para o bookkeeping (fechar run / status da integração) rodar mesmo que o ctx
+// do job esteja cancelado (context.WithoutCancel). Ver finding 8.
+const bgTimeout = 10 * time.Second
+
 // ErrNotConnected indica que não há integração conectada para a plataforma.
 var ErrNotConnected = errors.New("integração não conectada")
 
@@ -68,15 +78,28 @@ type SteamFactory func(apiKey string) SteamAPI
 
 // PlatformPayload é o payload do job sync_platform.
 type PlatformPayload struct {
-	Platform string `json:"platform"`
-	Scope    string `json:"scope"`
-	Trigger  string `json:"trigger"`
+	Platform  string `json:"platform"`
+	Scope     string `json:"scope"`
+	Trigger   string `json:"trigger"`
+	SyncRunID string `json:"sync_run_id"`
 }
 
 // GamePayload é o payload do job sync_game.
+//
+// SyncRunID é o run pai (fan-out) ou o run próprio (manual). CreateEvents é calculado por quem
+// enfileira (= integration.initial_sync_done naquele instante). Quando HasSnapshot, o pai já
+// mandou o estado remoto do owned-games (evita uma chamada por filho); senão o filho busca.
 type GamePayload struct {
-	GameID  string `json:"game_id"`
-	Trigger string `json:"trigger"`
+	GameID       string `json:"game_id"`
+	Trigger      string `json:"trigger"`
+	Scope        string `json:"scope"`
+	SyncRunID    string `json:"sync_run_id"`
+	CreateEvents bool   `json:"create_events"`
+	HasSnapshot  bool   `json:"has_snapshot"`
+	AppID        int    `json:"appid"`
+	Playtime     int    `json:"playtime"`
+	Rtime        int64  `json:"rtime"`
+	HasStats     bool   `json:"has_stats"`
 }
 
 // steamCredentials é o segredo persistido (cifrado) de uma integração Steam.
@@ -117,25 +140,82 @@ func New(d Deps) *Syncer {
 	}
 }
 
-// EnqueuePlatformSync enfileira um sync de plataforma (dedupe por plataforma+scope).
+// EnqueuePlatformSync cria o run PAI e enfileira o job sync_platform (dedupe por plataforma+scope).
+// Se o enfileiramento for suprimido por dedupe, o run recém-criado é removido (sem órfão).
 func (s *Syncer) EnqueuePlatformSync(ctx context.Context, platform, scope, trigger string) (*queue.Job, bool, error) {
-	return s.queue.Enqueue(ctx, queue.EnqueueParams{
+	integ, err := s.q.GetIntegration(ctx, platform)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, ErrNotConnected
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("carregar integração: %w", err)
+	}
+
+	run, err := s.q.StartSyncRun(ctx, dbgen.StartSyncRunParams{
+		IntegrationID: integ.ID, Platform: platform, Scope: scope, Trigger: trigger,
+		GamesTotal: 0, Sealed: false,
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("iniciar sync_run: %w", err)
+	}
+
+	job, enq, err := s.queue.Enqueue(ctx, queue.EnqueueParams{
 		Kind:      KindSyncPlatform,
-		Payload:   PlatformPayload{Platform: platform, Scope: scope, Trigger: trigger},
+		Payload:   PlatformPayload{Platform: platform, Scope: scope, Trigger: trigger, SyncRunID: uuidStr(run.ID)},
 		DedupeKey: fmt.Sprintf("%s:%s:%s", KindSyncPlatform, platform, scope),
 	})
+	if err != nil || !enq {
+		s.deleteRun(ctx, run.ID)
+		return job, enq, err
+	}
+	return job, enq, nil
 }
 
-// EnqueueGameSync enfileira um sync de um jogo (dedupe por jogo).
+// EnqueueGameSync cria um run próprio (scope=game, total=1) e enfileira o sync_game (dedupe por jogo).
 func (s *Syncer) EnqueueGameSync(ctx context.Context, gameID, trigger string) (*queue.Job, bool, error) {
-	return s.queue.Enqueue(ctx, queue.EnqueueParams{
-		Kind:      KindSyncGame,
-		Payload:   GamePayload{GameID: gameID, Trigger: trigger},
+	gameUUID, err := parseUUID(gameID)
+	if err != nil {
+		return nil, false, fmt.Errorf("game id inválido: %w", err)
+	}
+	game, err := s.q.GetGameByID(ctx, gameUUID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, fmt.Errorf("jogo não encontrado")
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("carregar jogo: %w", err)
+	}
+	integ, err := s.q.GetIntegration(ctx, game.Platform)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, ErrNotConnected
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("carregar integração: %w", err)
+	}
+
+	run, err := s.q.StartSyncRun(ctx, dbgen.StartSyncRunParams{
+		IntegrationID: integ.ID, Platform: game.Platform, Scope: ScopeGame, Trigger: trigger,
+		GamesTotal: 1, Sealed: true,
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("iniciar sync_run: %w", err)
+	}
+
+	job, enq, err := s.queue.Enqueue(ctx, queue.EnqueueParams{
+		Kind: KindSyncGame,
+		Payload: GamePayload{
+			GameID: gameID, Trigger: trigger, Scope: ScopeGame,
+			SyncRunID: uuidStr(run.ID), CreateEvents: integ.InitialSyncDone, HasSnapshot: false,
+		},
 		DedupeKey: fmt.Sprintf("%s:%s", KindSyncGame, gameID),
 	})
+	if err != nil || !enq {
+		s.deleteRun(ctx, run.ID)
+		return job, enq, err
+	}
+	return job, enq, nil
 }
 
-// HandleJob despacha um job reivindicado da fila para o syncer da plataforma.
+// HandleJob despacha um job reivindicado da fila para o handler adequado.
 func (s *Syncer) HandleJob(ctx context.Context, job queue.Job) error {
 	switch job.Kind {
 	case KindSyncPlatform:
@@ -143,23 +223,19 @@ func (s *Syncer) HandleJob(ctx context.Context, job queue.Job) error {
 		if err := json.Unmarshal(job.Payload, &p); err != nil {
 			return fmt.Errorf("payload sync_platform inválido: %w", err)
 		}
-		if p.Platform != "steam" {
-			s.logger.Warn("plataforma ainda não suportada no sync", slog.String("platform", p.Platform))
-			return nil
-		}
-		return s.syncSteam(ctx, p.Scope, p.Trigger, "")
+		return s.handlePlatform(ctx, p)
 	case KindSyncGame:
 		var p GamePayload
 		if err := json.Unmarshal(job.Payload, &p); err != nil {
 			return fmt.Errorf("payload sync_game inválido: %w", err)
 		}
-		return s.syncSteam(ctx, ScopeGame, p.Trigger, p.GameID)
+		return s.handleGame(ctx, job, p)
 	default:
 		return fmt.Errorf("kind de job desconhecido: %s", job.Kind)
 	}
 }
 
-// loadSteamClient carrega a integração Steam, decifra as credenciais e constrói o cliente.
+// loadSteam carrega a integração Steam, decifra as credenciais e constrói o cliente.
 func (s *Syncer) loadSteam(ctx context.Context) (dbgen.Integration, SteamAPI, steamCredentials, error) {
 	integ, err := s.q.GetIntegration(ctx, "steam")
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -177,6 +253,20 @@ func (s *Syncer) loadSteam(ctx context.Context) (dbgen.Integration, SteamAPI, st
 		return dbgen.Integration{}, nil, steamCredentials{}, fmt.Errorf("parse credenciais steam: %w", err)
 	}
 	return integ, s.steamFactory(creds.APIKey), creds, nil
+}
+
+// deleteRun remove um run (bookkeeping) num contexto que sobrevive ao cancelamento do job.
+func (s *Syncer) deleteRun(ctx context.Context, id pgtype.UUID) {
+	bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), bgTimeout)
+	defer cancel()
+	if err := s.q.DeleteSyncRun(bg, id); err != nil {
+		s.logger.Warn("falha ao remover sync_run órfão", slog.String("err", err.Error()))
+	}
+}
+
+// bg devolve um contexto desacoplado do cancelamento do job, com timeout curto, para o bookkeeping.
+func bg(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), bgTimeout)
 }
 
 // --- helpers de conversão pgtype ---
@@ -198,7 +288,28 @@ func parseUUID(s string) (pgtype.UUID, error) {
 	return u, nil
 }
 
-// metricStatus reflete o status da integração no gauge de métrica.
+// uuidStr formata um pgtype.UUID na forma canônica (vazio quando inválido).
+func uuidStr(u pgtype.UUID) string {
+	if !u.Valid {
+		return ""
+	}
+	b := u.Bytes
+	const hex = "0123456789abcdef"
+	buf := make([]byte, 36)
+	j := 0
+	for i := 0; i < 16; i++ {
+		if i == 4 || i == 6 || i == 8 || i == 10 {
+			buf[j] = '-'
+			j++
+		}
+		buf[j] = hex[b[i]>>4]
+		buf[j+1] = hex[b[i]&0x0f]
+		j += 2
+	}
+	return string(buf)
+}
+
+// setStatus reflete o status da integração no gauge de métrica.
 func (s *Syncer) setStatus(platform, status string) {
 	metrics.SetIntegrationStatus(platform, status)
 }

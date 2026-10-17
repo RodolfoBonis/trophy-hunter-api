@@ -66,7 +66,7 @@ func TestSmokeEndToEndRealClient(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "connected", integ.Status)
 
-	drainJobs(t, jobs, syncer)
+	processAll(t, jobs, syncer)
 
 	game, err := q.GetGameByExternal(ctx, dbgen.GetGameByExternalParams{Platform: "steam", ExternalID: "620"})
 	require.NoError(t, err)

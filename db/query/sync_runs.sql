@@ -1,15 +1,63 @@
 -- name: StartSyncRun :one
-INSERT INTO sync_runs (integration_id, platform, scope, trigger, status)
-VALUES ($1, $2, $3, $4, 'running')
+-- Cria o run (pai no fan-out, ou run único de um jogo). games_total/fanout_sealed já podem vir
+-- preenchidos (run de jogo único: total=1, sealed=true); no fan-out de plataforma começam 0/false.
+INSERT INTO sync_runs (integration_id, platform, scope, trigger, status, games_total, fanout_sealed)
+VALUES ($1, $2, $3, $4, 'running', sqlc.arg(games_total)::int, sqlc.arg(sealed)::boolean)
 RETURNING *;
 
--- name: FinishSyncRun :exec
+-- name: SealSyncRun :one
+-- Fixa games_total e marca o fan-out concluído. Se todos os filhos já terminaram (corrida com
+-- filhos rápidos), fecha o run aqui mesmo. Devolve se fechou e quantos jogos falharam.
 UPDATE sync_runs
-SET status = $2, finished_at = now(), items_changed = $3, games_touched = $4, error = $5
-WHERE id = $1;
+SET games_total   = sqlc.arg(games_total)::int,
+    fanout_sealed = true,
+    status = CASE WHEN games_done >= sqlc.arg(games_total)::int
+                  THEN CASE WHEN games_failed > 0 THEN 'error' ELSE 'ok' END
+                  ELSE status END,
+    finished_at = CASE WHEN games_done >= sqlc.arg(games_total)::int THEN now() ELSE finished_at END
+WHERE id = $1 AND status = 'running'
+RETURNING (games_done >= games_total)::boolean AS closed, games_failed, scope;
+
+-- name: FinalizeSyncRunChild :one
+-- Contabiliza o término (terminal) de UM job filho. Fecha o run quando o fan-out está selado e
+-- todos os filhos terminaram. Devolve se fechou e o total de falhas (para o status da integração).
+UPDATE sync_runs
+SET games_done    = games_done + 1,
+    games_failed  = games_failed + sqlc.arg(failed)::int,
+    items_changed = items_changed + sqlc.arg(changed)::int,
+    status = CASE WHEN fanout_sealed AND games_done + 1 >= games_total
+                  THEN CASE WHEN games_failed + sqlc.arg(failed)::int > 0 THEN 'error' ELSE 'ok' END
+                  ELSE status END,
+    finished_at = CASE WHEN fanout_sealed AND games_done + 1 >= games_total THEN now() ELSE finished_at END
+WHERE id = $1 AND status = 'running'
+RETURNING (fanout_sealed AND games_done >= games_total)::boolean AS closed, games_failed, scope;
+
+-- name: FailSyncRun :exec
+-- Fecha o run como erro (ex.: falha ao listar a biblioteca, antes do fan-out).
+UPDATE sync_runs
+SET status = 'error', finished_at = now(), error = sqlc.arg(error)::text
+WHERE id = $1 AND status = 'running';
+
+-- name: ReapStuckSyncRuns :execrows
+-- Reaper: runs presos em 'running' há mais de N minutos SEM nenhum job vivo que os referencie
+-- (worker reiniciou no meio) → marca 'error' (interrompido). Roda no boot e periodicamente.
+UPDATE sync_runs r
+SET status = 'error', finished_at = now(),
+    error = CASE WHEN r.error = '' THEN 'sync interrompido (worker reiniciou)' ELSE r.error END
+WHERE r.status = 'running'
+  AND r.started_at < now() - make_interval(mins => sqlc.arg(older_than_minutes)::int)
+  AND NOT EXISTS (
+      SELECT 1 FROM jobs j
+      WHERE j.status IN ('queued','running')
+        AND (j.payload->>'sync_run_id') = r.id::text
+  );
 
 -- name: ListSyncRuns :many
 SELECT * FROM sync_runs
 WHERE (sqlc.narg(platform)::text IS NULL OR platform = sqlc.narg(platform)::text)
 ORDER BY started_at DESC
 LIMIT $1;
+
+-- name: DeleteSyncRun :exec
+-- Remove um run órfão (ex.: enfileiramento suprimido por dedupe após criar o run).
+DELETE FROM sync_runs WHERE id = $1;

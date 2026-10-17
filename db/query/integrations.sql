@@ -36,10 +36,19 @@ SET display_name = $2, avatar = $3, account_id = $4, updated_at = now()
 WHERE platform = $1;
 
 -- name: MarkIntegrationSynced :exec
+-- Fecho de sync BEM-SUCEDIDO: marca last_synced_at, volta a status connected e limpa o erro.
+-- initial_sync_done só é ligado quando mark_initial (full inicial sem falhas).
 UPDATE integrations
 SET last_synced_at = now(), status = 'connected', last_error = '',
     initial_sync_done = initial_sync_done OR sqlc.arg(mark_initial)::boolean,
     updated_at = now()
+WHERE platform = $1;
+
+-- name: TouchIntegrationSynced :exec
+-- Fecho de sync COM falhas: só atualiza last_synced_at (preserva o status de erro que os jobs
+-- filhos mortos já definiram). Não volta a connected.
+UPDATE integrations
+SET last_synced_at = now(), updated_at = now()
 WHERE platform = $1;
 
 -- name: DeleteIntegration :exec

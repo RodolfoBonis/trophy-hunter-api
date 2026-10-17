@@ -98,8 +98,23 @@ type MarkIntegrationSyncedParams struct {
 	MarkInitial bool
 }
 
+// Fecho de sync BEM-SUCEDIDO: marca last_synced_at, volta a status connected e limpa o erro.
+// initial_sync_done só é ligado quando mark_initial (full inicial sem falhas).
 func (q *Queries) MarkIntegrationSynced(ctx context.Context, arg MarkIntegrationSyncedParams) error {
 	_, err := q.db.Exec(ctx, markIntegrationSynced, arg.Platform, arg.MarkInitial)
+	return err
+}
+
+const touchIntegrationSynced = `-- name: TouchIntegrationSynced :exec
+UPDATE integrations
+SET last_synced_at = now(), updated_at = now()
+WHERE platform = $1
+`
+
+// Fecho de sync COM falhas: só atualiza last_synced_at (preserva o status de erro que os jobs
+// filhos mortos já definiram). Não volta a connected.
+func (q *Queries) TouchIntegrationSynced(ctx context.Context, platform string) error {
+	_, err := q.db.Exec(ctx, touchIntegrationSynced, platform)
 	return err
 }
 

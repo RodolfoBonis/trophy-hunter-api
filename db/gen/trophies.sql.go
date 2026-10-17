@@ -13,8 +13,10 @@ import (
 
 const insertUnlockEvent = `-- name: InsertUnlockEvent :exec
 INSERT INTO unlock_events (trophy_id, detected_at) VALUES ($1, now())
+ON CONFLICT (trophy_id) DO NOTHING
 `
 
+// No máximo UM evento por troféu (uq_unlock_events_trophy); re-detecções do diff não duplicam.
 func (q *Queries) InsertUnlockEvent(ctx context.Context, trophyID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, insertUnlockEvent, trophyID)
 	return err

@@ -65,6 +65,7 @@ type Job struct {
 	DedupeKey   *string
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
+	LeaseToken  pgtype.UUID
 }
 
 type Setting struct {
@@ -86,6 +87,10 @@ type SyncRun struct {
 	GamesTouched  int32
 	Error         string
 	CreatedAt     pgtype.Timestamptz
+	GamesTotal    int32
+	GamesDone     int32
+	GamesFailed   int32
+	FanoutSealed  bool
 }
 
 type Trophy struct {
