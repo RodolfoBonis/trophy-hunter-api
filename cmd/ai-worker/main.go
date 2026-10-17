@@ -41,7 +41,7 @@ func run() error {
 	}
 	logger := telemetry.NewLogger(cfg.Telemetry)
 	slog.SetDefault(logger)
-	logger.Info("iniciando ai-worker", slog.String("version", trophyhunter.Version()), slog.String("model", cfg.AI.Model))
+	logger.Info("iniciando ai-worker", slog.String("version", trophyhunter.Version()), slog.String("model", cfg.AI.Model), slog.String("guide_model", cfg.AI.GuideModel))
 	if cfg.AI.OAuthToken == "" {
 		return errors.New("CLAUDE_CODE_OAUTH_TOKEN ausente (gere com `claude setup-token`)")
 	}

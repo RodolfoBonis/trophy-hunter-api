@@ -17,7 +17,7 @@ import (
 	syncpkg "github.com/RodolfoBonis/trophy-hunter-api/internal/sync"
 )
 
-const validTrophyGuide = `{"summary":"Vença o jogo.","steps":["Jogue a campanha","Derrote o chefe final"],"prerequisites":[],
+const validTrophyGuide = `{"where":"Capítulo final","summary":"Vença o jogo.","steps":["Jogue a campanha","Derrote o chefe final"],"prerequisites":[],
 "missable":false,"point_of_no_return":"","difficulty":3,"estimated_time":"8 h","tips":["Use o modo fácil"],
 "confidence":0.8,"uncertainty_notes":"","sources":["https://example.com/guia"]}`
 

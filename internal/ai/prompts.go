@@ -8,11 +8,20 @@ import (
 )
 
 // systemPrompt vale para todas as execuções (--append-system-prompt).
-const systemPrompt = `Você é o assistente de caça a troféus do Trophy Hunter (app pessoal de um único jogador).
-Responda SEMPRE em português do Brasil, direto ao ponto, com nomes de troféus/conquistas exatamente como fornecidos.
-Use WebSearch/WebFetch para confirmar detalhes em guias conhecidos (PSNProfiles, PowerPyx, TrueAchievements, Steam Community) — não invente localizações, números ou requisitos.
-Spoilers: não revele história, chefes finais ou o conteúdo de troféus ocultos além do estritamente necessário para obtê-los; quando precisar citar algo assim, avise antes.
-Quando não tiver certeza (jogo de nicho, versão/plataforma diferente, informação conflitante), diga isso claramente e baixe a confiança.`
+const systemPrompt = `Você é o assistente de caça a troféus do Trophy Hunter (app pessoal de um único jogador brasileiro).
+
+Pesquisa: use WebSearch/WebFetch para confirmar detalhes em guias conhecidos (PowerPyx, PSNProfiles, TrueAchievements, Steam Community). Não invente localizações, números ou requisitos. Os nomes de troféus que recebo estão em português (como aparecem no console); os guias costumam usar o nome em inglês — descubra a correspondência pela descrição/raridade.
+
+Escrita (obrigatório):
+- Português do Brasil correto e natural, com concordância certa (ex.: "a seleção de capítulos"). Nada de frases em inglês.
+- Nomes de capítulos, fases, lugares, itens e personagens: use o nome oficial em português do jogo, se existir; se não souber, traduza de forma natural e coloque o original em inglês entre parênteses SÓ na primeira menção. Comandos de controle como no PlayStation/Steam (R2, X, LT…).
+- Nomes de troféus: exatamente como fornecidos.
+- Seja direto: frases curtas, voz ativa, imperativo nos passos ("Vá até…", "Equipe…"). Um passo = uma ação.
+- Escreva para o jogador, não sobre a pesquisa: nunca "as fontes divergem", "não consegui abrir", "segundo o guia X" nos passos/resumo/dicas. Se houver dúvida real, escolha a versão mais provável nos passos e diga em UMA frase curta no campo de incertezas o que o jogador deve conferir no jogo.
+- Antes de responder, revise o texto: português, clareza, nada repetido entre resumo, passos e dicas.
+
+Spoilers: não revele história, chefes finais ou o conteúdo de troféus ocultos além do estritamente necessário para obtê-los; quando precisar, avise antes.
+Quando não tiver certeza (jogo de nicho, versão diferente, informação conflitante), baixe a confiança.`
 
 func platformName(p string) string {
 	if p == "psn" {
@@ -69,7 +78,10 @@ func trophyGuidePrompt(t dbgen.GetTrophyWithGameRow) string {
 	if t.Notes != "" {
 		fmt.Fprintf(&b, "Notas do jogador: %s\n", t.Notes)
 	}
-	b.WriteString("\nPreencha o schema: passos concretos e em ordem; se for perdível, diga o ponto de não retorno; dificuldade 1–10; tempo estimado; confiança 0–1 com as incertezas; URLs consultadas em sources.")
+	b.WriteString("\nPreencha o schema seguindo as regras de escrita: em `where`, onde o troféu sai (capítulo/fase/área); " +
+		"`summary` em 1–2 frases dizendo o que fazer; `steps` curtos e em ordem (até 8); perdível + ponto de não retorno " +
+		"se for o caso; dificuldade 1–10; tempo estimado; dicas práticas (até 4); confiança 0–1; incerteza em uma frase; " +
+		"URLs em sources.")
 	return b.String()
 }
 
@@ -132,7 +144,8 @@ func roadmapPrompt(g dbgen.Game, trophies []dbgen.GameTrophiesForAIRow) string {
 	return "Monte o roadmap para eu completar este jogo a partir do meu progresso atual " +
 		"(platina na PSN / 100% na Steam). Considere só o que FALTA. Ordene as etapas (jogadas, " +
 		"limpeza pós-jogo, DLCs), destaque os perdíveis a garantir antes de cada ponto de não retorno, " +
-		"e estime o tempo total restante. Nas etapas, cite os troféus pelos nomes exatos da lista.\n\n" +
+		"e estime o tempo total restante. Cada troféu que falta deve aparecer em alguma etapa, pelo nome " +
+		"exato da lista. Descrições de etapa objetivas (2–4 frases), seguindo as regras de escrita.\n\n" +
 		progressContext(g, trophies)
 }
 

@@ -270,9 +270,12 @@ func (c Config) IsProd() bool { return c.Env == "prod" }
 // repassa a stream. OAuthToken é o CLAUDE_CODE_OAUTH_TOKEN da assinatura (SEGREDO: só vai para o
 // processo da CLI, nunca é logado) e só é exigido pelo ai-worker.
 type AI struct {
-	ClaudeBin  string        `env:"AI_CLAUDE_BIN" envDefault:"claude"`
-	OAuthToken string        `env:"CLAUDE_CODE_OAUTH_TOKEN"`
+	ClaudeBin  string `env:"AI_CLAUDE_BIN" envDefault:"claude"`
+	OAuthToken string `env:"CLAUDE_CODE_OAUTH_TOKEN"`
+	// Model é o do chat (resposta rápida); GuideModel o dos guias/roadmaps (ficam salvos: qualidade
+	// vale mais que velocidade).
 	Model      string        `env:"AI_MODEL" envDefault:"sonnet"`
+	GuideModel string        `env:"AI_MODEL_GUIDE" envDefault:"opus"`
 	JobTimeout time.Duration `env:"AI_JOB_TIMEOUT" envDefault:"6m"`
 	// Home é o HOME da CLI (~/.claude guarda as sessões do --resume do chat).
 	Home string `env:"AI_HOME" envDefault:"/home/node"`

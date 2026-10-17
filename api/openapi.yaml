@@ -698,6 +698,7 @@ components:
       additionalProperties: false
       required: [summary, steps, prerequisites, missable, point_of_no_return, difficulty, estimated_time, tips, confidence, uncertainty_notes, sources]
       properties:
+        where: { type: string, description: "Onde o troféu sai (capítulo/fase/área). Ausente em guias v1." }
         summary: { type: string }
         steps: { type: array, minItems: 1, items: { type: string } }
         prerequisites: { type: array, items: { type: string } }

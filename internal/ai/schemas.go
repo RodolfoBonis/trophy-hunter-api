@@ -13,10 +13,12 @@ import (
 )
 
 // SchemaVersion é a versão dos schemas de guia (ai_guides.schema_version).
-const SchemaVersion = 1
+// v2: campo "where" no guia de troféu (opcional na validação, para guias v1 continuarem válidos).
+const SchemaVersion = 2
 
 // TrophyGuide é o guia de um troféu (schema trophy_guide v1).
 type TrophyGuide struct {
+	Where            string   `json:"where"`
 	Summary          string   `json:"summary"`
 	Steps            []string `json:"steps"`
 	Prerequisites    []string `json:"prerequisites"`
@@ -57,18 +59,19 @@ const strList = `{"type":"array","items":{"type":"string"}}`
 // TrophyGuideSchema é o JSON Schema passado à CLI para o guia de troféu.
 var TrophyGuideSchema = compact(`{
   "type":"object","additionalProperties":false,
-  "required":["summary","steps","prerequisites","missable","point_of_no_return","difficulty","estimated_time","tips","confidence","uncertainty_notes","sources"],
+  "required":["where","summary","steps","prerequisites","missable","point_of_no_return","difficulty","estimated_time","tips","confidence","uncertainty_notes","sources"],
   "properties":{
-    "summary":{"type":"string","description":"1–2 frases: o que é preciso para o troféu."},
-    "steps":{"type":"array","minItems":1,"items":{"type":"string"},"description":"Passo a passo em ordem."},
-    "prerequisites":` + strList + `,
+    "where":{"type":"string","description":"Onde o troféu sai, curto: capítulo/fase/área (nome em PT-BR; original entre parênteses se diferente). Ex.: \"Capítulo 3 — Esperanças da Primavera (Hopes of Spring), fase O Sublaboratório\". Vazio se não depende de lugar."},
+    "summary":{"type":"string","description":"1–2 frases curtas dizendo O QUE fazer. Sem ressalvas nem fontes."},
+    "steps":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"string"},"description":"Passos em ordem, cada um uma ação objetiva no imperativo (1 frase, no máximo 2). Sem 'as fontes divergem', sem hipóteses."},
+    "prerequisites":{"type":"array","maxItems":4,"items":{"type":"string"},"description":"O que precisa antes (curto). Vazio se nada."},
     "missable":{"type":"boolean","description":"Pode ser perdido (exige outro save/NG+ se passar do ponto)."},
-    "point_of_no_return":{"type":"string","description":"Onde deixa de ser possível; vazio se não houver."},
+    "point_of_no_return":{"type":"string","description":"Se perdível: a partir de onde não dá mais. Vazio se não for perdível."},
     "difficulty":{"type":"integer","minimum":1,"maximum":10},
-    "estimated_time":{"type":"string","description":"Ex.: \"30 min\", \"2–3 h\"."},
-    "tips":` + strList + `,
+    "estimated_time":{"type":"string","description":"Ex.: \"10 min\", \"2–3 h\"."},
+    "tips":{"type":"array","maxItems":4,"items":{"type":"string"},"description":"Dicas práticas de jogo (não notas sobre fontes). Vazio se nada útil."},
     "confidence":{"type":"number","minimum":0,"maximum":1,"description":"Confiança na precisão do guia."},
-    "uncertainty_notes":{"type":"string","description":"O que pode estar errado/incerto; vazio se nada."},
+    "uncertainty_notes":{"type":"string","description":"UMA frase para o jogador sobre o que conferir no jogo; vazio se confiante. Não narre a pesquisa."},
     "sources":{"type":"array","items":{"type":"string"},"description":"URLs consultadas."}
   }}`)
 
@@ -77,22 +80,22 @@ var RoadmapSchema = compact(`{
   "type":"object","additionalProperties":false,
   "required":["summary","difficulty","estimated_total_time","playthroughs","stages","missables_overview","tips","confidence","uncertainty_notes","sources"],
   "properties":{
-    "summary":{"type":"string"},
+    "summary":{"type":"string","description":"2–3 frases: o plano em resumo. Sem ressalvas."},
     "difficulty":{"type":"integer","minimum":1,"maximum":10},
-    "estimated_total_time":{"type":"string"},
+    "estimated_total_time":{"type":"string","description":"Curto. Ex.: \"12–18 h\"."},
     "playthroughs":{"type":"integer","minimum":1,"description":"Mínimo de jogadas necessárias."},
     "stages":{"type":"array","minItems":1,"items":{
       "type":"object","additionalProperties":false,"required":["title","description","trophies","missables"],
       "properties":{
-        "title":{"type":"string"},
-        "description":{"type":"string"},
-        "trophies":{"type":"array","items":{"type":"string"},"description":"Nomes exatos dos troféus desta etapa."},
-        "missables":{"type":"array","items":{"type":"string"},"description":"Perdíveis a garantir antes de avançar."}
+        "title":{"type":"string","description":"Curto, sem numeração (a UI numera)."},
+        "description":{"type":"string","description":"O que fazer nesta etapa, em 2–4 frases objetivas."},
+        "trophies":{"type":"array","items":{"type":"string"},"description":"Nomes EXATOS dos troféus desta etapa, como na lista fornecida."},
+        "missables":{"type":"array","items":{"type":"string"},"description":"Perdíveis a garantir antes de avançar (curto). Vazio se nenhum."}
       }}},
-    "missables_overview":` + strList + `,
-    "tips":` + strList + `,
+    "missables_overview":{"type":"array","maxItems":5,"items":{"type":"string"},"description":"Avisos importantes do jogo inteiro (perdíveis, co-op, etc.), curtos."},
+    "tips":{"type":"array","maxItems":5,"items":{"type":"string"},"description":"Dicas práticas de jogo."},
     "confidence":{"type":"number","minimum":0,"maximum":1},
-    "uncertainty_notes":{"type":"string"},
+    "uncertainty_notes":{"type":"string","description":"UMA frase para o jogador sobre o que conferir; vazio se confiante. Não narre a pesquisa."},
     "sources":` + strList + `
   }}`)
 
@@ -157,12 +160,19 @@ func strictDecode(raw []byte, dst any, schema string) error {
 	}
 	_ = json.Unmarshal([]byte(schema), &s)
 	for _, k := range s.Required {
+		if optionalOnRead[k] {
+			continue
+		}
 		if v, ok := present[k]; !ok || string(v) == "null" {
 			return fmt.Errorf("%w: campo %q ausente", ErrInvalidGuide, k)
 		}
 	}
 	return nil
 }
+
+// optionalOnRead são campos exigidos do modelo mas opcionais na validação (guias de versões
+// anteriores não os têm).
+var optionalOnRead = map[string]bool{"where": true}
 
 func checkRanges(difficulty int, confidence float64) error {
 	if difficulty < 1 || difficulty > 10 {

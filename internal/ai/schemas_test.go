@@ -72,3 +72,12 @@ func TestChatPromptTranscriptLimit(t *testing.T) {
 	resumed := chatPrompt(dbgen.Game{Title: "J"}, nil, hist, "pergunta", true)
 	require.NotContains(t, resumed, "Conversa até agora", "com --resume a CLI já tem o histórico")
 }
+
+func TestValidateGuideWhereIsOptionalForV1(t *testing.T) {
+	out, err := ValidateGuide(ScopeTrophy, []byte(strings.Replace(guideOK, `"summary":"S"`, `"where":"Capítulo 3","summary":"S"`, 1)))
+	require.NoError(t, err)
+	require.Contains(t, string(out), `"where":"Capítulo 3"`)
+	_, err = ValidateGuide(ScopeTrophy, []byte(guideOK))
+	require.NoError(t, err, "guias v1 (sem where) continuam válidos")
+	require.Contains(t, TrophyGuideSchema, `"required":["where"`, "o modelo é obrigado a preencher where")
+}

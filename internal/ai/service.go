@@ -53,25 +53,32 @@ type Deps struct {
 	Queue   queue.Queue
 	Redis   *redis.Client
 	Runner  Runner
-	Model   string
-	Workdir string
-	Logger  *slog.Logger
+	// Model é o do chat; GuideModel o dos guias/roadmaps (vazio = Model).
+	Model      string
+	GuideModel string
+	Workdir    string
+	Logger     *slog.Logger
 }
 
 // Service coordena pedidos (API) e execuções (ai-worker).
 type Service struct {
-	q       *dbgen.Queries
-	queue   queue.Queue
-	rdb     *redis.Client
-	runner  Runner
-	model   string
-	workdir string
-	logger  *slog.Logger
+	q          *dbgen.Queries
+	queue      queue.Queue
+	rdb        *redis.Client
+	runner     Runner
+	model      string
+	guideModel string
+	workdir    string
+	logger     *slog.Logger
 }
 
 // New constrói o serviço.
 func New(d Deps) *Service {
-	return &Service{q: d.Queries, queue: d.Queue, rdb: d.Redis, runner: d.Runner, model: d.Model, workdir: d.Workdir, logger: d.Logger}
+	gm := d.GuideModel
+	if gm == "" {
+		gm = d.Model
+	}
+	return &Service{q: d.Queries, queue: d.Queue, rdb: d.Redis, runner: d.Runner, model: d.Model, guideModel: gm, workdir: d.Workdir, logger: d.Logger}
 }
 
 type guidePayload struct {
@@ -199,7 +206,7 @@ func (s *Service) handleGuide(ctx context.Context, p guidePayload) error {
 	if err != nil {
 		return err
 	}
-	req := claude.Request{SystemPrompt: systemPrompt, Model: s.model, AllowedTools: AllowedTools, Workdir: s.dir("guides")}
+	req := claude.Request{SystemPrompt: systemPrompt, Model: s.guideModel, AllowedTools: AllowedTools, Workdir: s.dir("guides")}
 	switch guide.Scope {
 	case ScopeTrophy:
 		tid, err := parseUUID(p.TrophyID)
@@ -240,7 +247,7 @@ func (s *Service) handleGuide(ctx context.Context, p guidePayload) error {
 	if verr != nil {
 		return s.finishGuideError(ctx, guide, pub, verr.Error())
 	}
-	if err := s.q.CompleteGuide(ctx, dbgen.CompleteGuideParams{ID: guide.ID, Content: content, Model: s.modelName(), SchemaVersion: SchemaVersion}); err != nil {
+	if err := s.q.CompleteGuide(ctx, dbgen.CompleteGuideParams{ID: guide.ID, Content: content, Model: modelName(s.guideModel), SchemaVersion: SchemaVersion}); err != nil {
 		return err
 	}
 	metrics.AIJob(guide.Scope, "ok")
@@ -404,11 +411,11 @@ func (s *Service) dir(parts ...string) string {
 	return d
 }
 
-func (s *Service) modelName() string {
-	if s.model == "" {
+func modelName(m string) string {
+	if m == "" {
 		return "claude"
 	}
-	return s.model
+	return m
 }
 
 // userMessage traduz o erro técnico em algo exibível (sem detalhes internos).
