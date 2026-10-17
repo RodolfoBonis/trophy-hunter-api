@@ -441,6 +441,16 @@ components:
         display_name: { type: string }
         game_id: { type: string, format: uuid, description: "Linha do jogo nesta conta (GET /games/{id})." }
         progress: { $ref: "#/components/schemas/ProgressSummary" }
+    TypeCounts:
+      type: object
+      description: Troféus ganhos/total por tipo (PSN) e conquistas raras ganhas (< 5%) — contadores do card.
+      required: [platinum, gold, silver, bronze, rare_earned]
+      properties:
+        platinum: { $ref: "#/components/schemas/TypeCount" }
+        gold: { $ref: "#/components/schemas/TypeCount" }
+        silver: { $ref: "#/components/schemas/TypeCount" }
+        bronze: { $ref: "#/components/schemas/TypeCount" }
+        rare_earned: { type: integer }
     GameListItem:
       description: >
         Um item por jogo (platform + external_id). Game/progress são da conta MAIS AVANÇADA (id =
@@ -448,10 +458,11 @@ components:
       allOf:
         - $ref: "#/components/schemas/Game"
         - type: object
-          required: [progress, accounts]
+          required: [progress, accounts, counts]
           properties:
             progress: { $ref: "#/components/schemas/ProgressSummary" }
             last_unlock_at: { type: [string, "null"], format: date-time, description: "Desbloqueio mais recente (conta best)." }
+            counts: { $ref: "#/components/schemas/TypeCounts" }
             accounts:
               type: array
               items: { $ref: "#/components/schemas/GameAccount" }

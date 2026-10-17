@@ -123,9 +123,25 @@ func toGameAccountDTO(r dbgen.ListGameAccountsRow, hasPlatinum bool) gameAccount
 
 // gameListItemDTO ↔ components.schemas.GameListItem. Uma entrada por jogo (platform+external_id):
 // os campos de Game/progress são da conta MAIS AVANÇADA (id = game_id dela); accounts lista todas.
+// typeCountsDTO ↔ components.schemas.TypeCounts: troféus ganhos/total por tipo (PSN) e conquistas
+// raras ganhas (< 5% dos jogadores) — os contadores do card da biblioteca.
+type typeCountsDTO struct {
+	Platinum   typeCountDTO `json:"platinum"`
+	Gold       typeCountDTO `json:"gold"`
+	Silver     typeCountDTO `json:"silver"`
+	Bronze     typeCountDTO `json:"bronze"`
+	RareEarned int          `json:"rare_earned"`
+}
+
+type typeCountDTO struct {
+	Earned int `json:"earned"`
+	Total  int `json:"total"`
+}
+
 type gameListItemDTO struct {
 	gameDTO
 	Progress progressSummaryDTO `json:"progress"`
+	Counts   typeCountsDTO      `json:"counts"`
 	// LastUnlockAt é o desbloqueio mais recente da conta representada (best).
 	LastUnlockAt *time.Time       `json:"last_unlock_at"`
 	Accounts     []gameAccountDTO `json:"accounts"`
@@ -152,7 +168,14 @@ func toListItemDTO(r dbgen.ListGamesRow) gameListItemDTO {
 		Tags:            nonNil(r.Tags),
 	}
 	return gameListItemDTO{
-		gameDTO:      g,
+		gameDTO: g,
+		Counts: typeCountsDTO{
+			Platinum:   typeCountDTO{Earned: int(r.PlatinumEarned), Total: int(r.PlatinumTotal)},
+			Gold:       typeCountDTO{Earned: int(r.GoldEarned), Total: int(r.GoldTotal)},
+			Silver:     typeCountDTO{Earned: int(r.SilverEarned), Total: int(r.SilverTotal)},
+			Bronze:     typeCountDTO{Earned: int(r.BronzeEarned), Total: int(r.BronzeTotal)},
+			RareEarned: int(r.RareEarned),
+		},
 		LastUnlockAt: tptr(r.LastUnlockAt),
 		Progress: progressSummaryDTO{
 			Total:         int(r.Total),

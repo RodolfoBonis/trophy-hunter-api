@@ -58,7 +58,17 @@ WITH agg AS (
         COUNT(t.id)                                                        AS total,
         COUNT(t.id) FILTER (WHERE t.earned)                                AS earned,
         COALESCE(AVG(t.rarity_pct) FILTER (WHERE NOT t.earned), 0)::float8  AS avg_remaining_rarity,
-        MAX(t.earned_at)::timestamptz                                      AS last_unlock_at
+        MAX(t.earned_at)::timestamptz                                      AS last_unlock_at,
+        -- Contagens por tipo (PSN) e conquistas raras ganhas (< 5% dos jogadores) p/ o card.
+        COUNT(t.id) FILTER (WHERE t.type = 'platinum')                     AS platinum_total,
+        COUNT(t.id) FILTER (WHERE t.type = 'platinum' AND t.earned)        AS platinum_earned,
+        COUNT(t.id) FILTER (WHERE t.type = 'gold')                         AS gold_total,
+        COUNT(t.id) FILTER (WHERE t.type = 'gold' AND t.earned)            AS gold_earned,
+        COUNT(t.id) FILTER (WHERE t.type = 'silver')                       AS silver_total,
+        COUNT(t.id) FILTER (WHERE t.type = 'silver' AND t.earned)          AS silver_earned,
+        COUNT(t.id) FILTER (WHERE t.type = 'bronze')                       AS bronze_total,
+        COUNT(t.id) FILTER (WHERE t.type = 'bronze' AND t.earned)          AS bronze_earned,
+        COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct < 5)           AS rare_earned
     FROM games g
     JOIN integrations i ON i.id = g.integration_id
     LEFT JOIN trophies t ON t.game_id = g.id
