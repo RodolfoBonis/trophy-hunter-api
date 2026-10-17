@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   get_commit_messages:
-    runs-on: arc-trophy-hunter-api
+    runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' && !contains(github.event.workflow_run.head_commit.message, '[skip ci]') }}
     env:
       GH_TOKEN: ${{ github.token }}
@@ -47,7 +47,7 @@ jobs:
   build_and_deploy:
     needs: get_commit_messages
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && !contains(github.event.workflow_run.head_commit.message, '[skip ci]') }}
-    runs-on: arc-trophy-hunter-api
+    runs-on: ubuntu-latest
     outputs:
       version: ${{ env.VERSION }}
     steps:
@@ -148,8 +148,8 @@ jobs:
 
       - name: Sync ArgoCD Application
         run: |
-          argocd app sync trophy-hunter-api-prod --grpc-web --plaintext \
-            --server argocd-server.argocd.svc.cluster.local:80 \
+          argocd app sync trophy-hunter-api-prod --grpc-web \
+            --server ${{ secrets.ARGOCD_SERVER }} \
             --auth-token ${{ secrets.ARGOCD_TOKEN }}
 
       - name: Create Tag for Release
@@ -176,7 +176,7 @@ jobs:
 
   notify:
     needs: build_and_deploy
-    runs-on: arc-trophy-hunter-api
+    runs-on: ubuntu-latest
     if: always()
     steps:
       - if: ${{ needs.build_and_deploy.result == 'success' }}
