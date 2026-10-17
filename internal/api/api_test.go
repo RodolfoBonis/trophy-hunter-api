@@ -124,12 +124,12 @@ func (e *testEnv) drain(t *testing.T) {
 func TestMeRequiresAuth(t *testing.T) {
 	e := setup(t)
 	resp := e.do(t, http.MethodGet, "/api/v1/me", "", false)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	require.Equal(t, "application/problem+json", resp.Header.Get("Content-Type"))
 
 	resp2 := e.do(t, http.MethodGet, "/api/v1/me", "", true)
-	defer resp2.Body.Close()
+	defer func() { _ = resp2.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp2.StatusCode)
 	var u map[string]any
 	require.NoError(t, json.NewDecoder(resp2.Body).Decode(&u))
@@ -143,7 +143,7 @@ func TestConnectSyncAndBrowse(t *testing.T) {
 	resp := e.do(t, http.MethodPut, "/api/v1/integrations/steam",
 		`{"api_key":"FAKEKEY","steam_id_or_vanity":"76561197960000000"}`, true)
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
 	require.NotContains(t, string(body), "FAKEKEY", "nunca retornar a API key")
 
@@ -153,7 +153,7 @@ func TestConnectSyncAndBrowse(t *testing.T) {
 	// GET /integrations não vaza segredos.
 	ri := e.do(t, http.MethodGet, "/api/v1/integrations", "", true)
 	ib, _ := io.ReadAll(ri.Body)
-	ri.Body.Close()
+	_ = ri.Body.Close()
 	require.Equal(t, http.StatusOK, ri.StatusCode)
 	require.Contains(t, string(ib), `"status":"connected"`)
 	require.NotContains(t, string(ib), "credentials")
@@ -161,7 +161,7 @@ func TestConnectSyncAndBrowse(t *testing.T) {
 	// GET /games.
 	rg := e.do(t, http.MethodGet, "/api/v1/games", "", true)
 	gb, _ := io.ReadAll(rg.Body)
-	rg.Body.Close()
+	_ = rg.Body.Close()
 	require.Equal(t, http.StatusOK, rg.StatusCode)
 
 	var page struct {
@@ -185,7 +185,7 @@ func TestConnectSyncAndBrowse(t *testing.T) {
 	// GET /games/{id} detalhe.
 	rd := e.do(t, http.MethodGet, "/api/v1/games/"+page.Items[0].ID, "", true)
 	db, _ := io.ReadAll(rd.Body)
-	rd.Body.Close()
+	_ = rd.Body.Close()
 	require.Equal(t, http.StatusOK, rd.StatusCode)
 
 	var detail struct {
@@ -215,7 +215,7 @@ func TestConnectSyncAndBrowse(t *testing.T) {
 	// GET /sync-runs tem o full sync concluído.
 	rs := e.do(t, http.MethodGet, "/api/v1/sync-runs?platform=steam", "", true)
 	sb, _ := io.ReadAll(rs.Body)
-	rs.Body.Close()
+	_ = rs.Body.Close()
 	require.Equal(t, http.StatusOK, rs.StatusCode)
 	require.Contains(t, string(sb), `"scope":"full"`)
 	require.Contains(t, string(sb), `"status":"ok"`)
@@ -224,6 +224,6 @@ func TestConnectSyncAndBrowse(t *testing.T) {
 func TestGetUnknownGame404(t *testing.T) {
 	e := setup(t)
 	resp := e.do(t, http.MethodGet, "/api/v1/games/00000000-0000-0000-0000-000000000000", "", true)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }

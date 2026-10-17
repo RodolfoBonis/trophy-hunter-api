@@ -29,7 +29,7 @@ func (s *Syncer) ConnectSteam(ctx context.Context, apiKey, idOrVanity string) (d
 	}
 
 	creds := steamCredentials{APIKey: apiKey, SteamID: steamID}
-	plain, err := json.Marshal(creds)
+	plain, err := json.Marshal(creds) //nolint:gosec // serializado só para cifragem imediata (AES-GCM)
 	if err != nil {
 		return dbgen.Integration{}, fmt.Errorf("serializar credenciais: %w", err)
 	}

@@ -1,0 +1,58 @@
+name: CI
+
+# Push só no main (o CD depende deste run); branches de PR rodam via pull_request, para não
+# disparar o CI duas vezes no runner self-hosted (nó único rb-lab, disco é o gargalo).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26.x"
+  # Caches no PVC de tool cache do runner (ARC arc-trophy-hunter-api), persistem entre jobs.
+  GOMODCACHE: /opt/hostedtoolcache/.go/mod
+  GOCACHE: /opt/hostedtoolcache/.go/build
+  GOLANGCI_LINT_CACHE: /opt/hostedtoolcache/.golangci-lint
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: arc-trophy-hunter-api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+          skip-cache: true
+      - name: go vet
+        run: go vet ./...
+
+  test:
+    name: Build + unit tests
+    runs-on: arc-trophy-hunter-api
+    # Os testes de integração (queue/sync/api) usam testcontainers (Docker), indisponível no runner;
+    # eles pulam com -short. A cobertura de Docker roda localmente (make test com Colima).
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: go build
+        run: go build ./...
+      - name: go test (short, race)
+        run: go test -short -race -count=1 ./...

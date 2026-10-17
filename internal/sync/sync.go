@@ -190,13 +190,6 @@ func tsFromUnix(sec int64) pgtype.Timestamptz {
 	return ts(time.Unix(sec, 0).UTC())
 }
 
-func uuidString(u pgtype.UUID) string {
-	if !u.Valid {
-		return ""
-	}
-	return fmt.Sprintf("%x-%x-%x-%x-%x", u.Bytes[0:4], u.Bytes[4:6], u.Bytes[6:8], u.Bytes[8:10], u.Bytes[10:16])
-}
-
 func parseUUID(s string) (pgtype.UUID, error) {
 	var u pgtype.UUID
 	if err := u.Scan(s); err != nil {
@@ -204,8 +197,6 @@ func parseUUID(s string) (pgtype.UUID, error) {
 	}
 	return u, nil
 }
-
-func ptr[T any](v T) *T { return &v }
 
 // metricStatus reflete o status da integração no gauge de métrica.
 func (s *Syncer) setStatus(platform, status string) {

@@ -25,16 +25,16 @@ const (
 
 // Config agrega toda a configuração do serviço (API + worker).
 type Config struct {
-	Env         string `env:"APP_ENV" envDefault:"dev"`
-	HTTP        HTTP
-	Metrics     Metrics
-	DB          DB
-	Redis       Redis
-	Auth        Auth
-	Crypto      Crypto
-	Telemetry   Telemetry
-	Sync        Sync
-	Steam       Steam
+	Env               string `env:"APP_ENV" envDefault:"dev"`
+	HTTP              HTTP
+	Metrics           Metrics
+	DB                DB
+	Redis             Redis
+	Auth              Auth
+	Crypto            Crypto
+	Telemetry         Telemetry
+	Sync              Sync
+	Steam             Steam
 	WorkerConcurrency int `env:"WORKER_CONCURRENCY" envDefault:"4"`
 }
 

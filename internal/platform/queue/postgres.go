@@ -149,8 +149,8 @@ func (q *PostgresQueue) backoffFor(attempt int) time.Duration {
 	}
 	exp := math.Pow(2, float64(attempt-1))
 	delay := float64(q.backoff.Base) * exp
-	if max := float64(q.backoff.Max); delay > max {
-		delay = max
+	if maxDelay := float64(q.backoff.Max); delay > maxDelay {
+		delay = maxDelay
 	}
 	if q.backoff.Jitter > 0 {
 		// jitter simétrico: delay * (1 ± jitter)

@@ -19,7 +19,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func tptr(t pgtype.Timestamptz) *time.Time {
 	if !t.Valid {
 		return nil
-
 	}
 	v := t.Time
 	return &v
