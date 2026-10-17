@@ -23,6 +23,7 @@ import (
 const (
 	iconURLFmt  = "https://media.steampowered.com/steamcommunity/public/images/apps/%d/%s.jpg"
 	coverURLFmt = "https://cdn.akamai.steamstatic.com/steam/apps/%d/library_600x900.jpg"
+	heroURLFmt  = "https://cdn.akamai.steamstatic.com/steam/apps/%d/header.jpg"
 )
 
 // handlePlatform executa a etapa de fan-out: lista a biblioteca, upserta as identidades e emite um
@@ -376,6 +377,7 @@ func (s *Syncer) upsertGameIdentity(ctx context.Context, integID pgtype.UUID, og
 		NormalizedTitle: NormalizeTitle(og.Name),
 		Icon:            icon,
 		Cover:           coverURL(og.AppID, art),
+		Hero:            heroURL(og.AppID, art),
 		Platforms:       []string{},
 		HasAchievements: og.HasCommunityVisibleStats, // só vale p/ INSERT; no conflito é preservado
 		LastPlayedAt:    tsFromUnix(og.RtimeLastPlayed),
@@ -621,4 +623,12 @@ func coverURL(appID int, art steam.AppAssets) string {
 	default:
 		return fmt.Sprintf(coverURLFmt, appID)
 	}
+}
+
+// heroURL escolhe a arte horizontal: header da loja (hash) → caminho fixo antigo do header.
+func heroURL(appID int, art steam.AppAssets) string {
+	if art.Header != "" {
+		return art.Header
+	}
+	return fmt.Sprintf(heroURLFmt, appID)
 }

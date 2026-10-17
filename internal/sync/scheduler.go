@@ -14,6 +14,9 @@ import (
 // schedulerLockKey é a chave do lock de agendamento (uma réplica agenda por tick).
 const schedulerLockKey = "trophy:scheduler:lock"
 
+// schedulerLockTTL é a janela do lock de agendamento entre réplicas.
+const schedulerLockTTL = 2 * time.Minute
+
 // initialPassDelay é o atraso do primeiro agendamento após o boot (não espera um intervalo inteiro).
 const initialPassDelay = time.Minute
 
@@ -92,9 +95,9 @@ func (s *Scheduler) acquire(ctx context.Context) bool {
 	if s.redis == nil {
 		return true
 	}
-	// TTL < interval para o lock expirar antes do próximo tick.
-	ttl := s.interval - s.interval/10
-	ok, err := s.redis.SetNX(ctx, schedulerLockKey, "1", ttl).Result()
+	// O lock só serializa réplicas que disparam no MESMO momento (o dedupe da fila já evita jobs
+	// duplicados). Um TTL longo (ex.: ~interval) fazia todo restart do worker pular a passada inicial.
+	ok, err := s.redis.SetNX(ctx, schedulerLockKey, "1", schedulerLockTTL).Result()
 	if err != nil {
 		s.logger.Warn("scheduler: lock redis indisponível, agendando assim mesmo", slog.String("err", err.Error()))
 		return true

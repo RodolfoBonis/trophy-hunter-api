@@ -417,6 +417,7 @@ components:
         title: { type: string }
         icon: { type: string }
         cover: { type: string }
+        hero: { type: string, description: "Arte horizontal (Steam header). Vazio → use cover." }
         platforms:
           type: array
           items: { type: string }
@@ -450,6 +451,7 @@ components:
           required: [progress, accounts]
           properties:
             progress: { $ref: "#/components/schemas/ProgressSummary" }
+            last_unlock_at: { type: [string, "null"], format: date-time, description: "Desbloqueio mais recente (conta best)." }
             accounts:
               type: array
               items: { $ref: "#/components/schemas/GameAccount" }

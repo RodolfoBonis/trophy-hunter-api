@@ -50,6 +50,7 @@ type gameDTO struct {
 	Title           string     `json:"title"`
 	Icon            string     `json:"icon"`
 	Cover           string     `json:"cover"`
+	Hero            string     `json:"hero"`
 	Platforms       []string   `json:"platforms"`
 	HasAchievements bool       `json:"has_achievements"`
 	HasPlatinum     bool       `json:"has_platinum"`
@@ -70,6 +71,7 @@ func toGameDTO(g dbgen.Game) gameDTO {
 		Title:           g.Title,
 		Icon:            g.Icon,
 		Cover:           g.Cover,
+		Hero:            g.Hero,
 		Platforms:       nonNil(g.Platforms),
 		HasAchievements: g.HasAchievements,
 		HasPlatinum:     g.HasPlatinum,
@@ -124,7 +126,9 @@ func toGameAccountDTO(r dbgen.ListGameAccountsRow, hasPlatinum bool) gameAccount
 type gameListItemDTO struct {
 	gameDTO
 	Progress progressSummaryDTO `json:"progress"`
-	Accounts []gameAccountDTO   `json:"accounts"`
+	// LastUnlockAt é o desbloqueio mais recente da conta representada (best).
+	LastUnlockAt *time.Time       `json:"last_unlock_at"`
+	Accounts     []gameAccountDTO `json:"accounts"`
 }
 
 func toListItemDTO(r dbgen.ListGamesRow) gameListItemDTO {
@@ -136,6 +140,7 @@ func toListItemDTO(r dbgen.ListGamesRow) gameListItemDTO {
 		Title:           r.Title,
 		Icon:            r.Icon,
 		Cover:           r.Cover,
+		Hero:            r.Hero,
 		Platforms:       nonNil(r.Platforms),
 		HasAchievements: r.HasAchievements,
 		HasPlatinum:     r.HasPlatinum,
@@ -147,7 +152,8 @@ func toListItemDTO(r dbgen.ListGamesRow) gameListItemDTO {
 		Tags:            nonNil(r.Tags),
 	}
 	return gameListItemDTO{
-		gameDTO: g,
+		gameDTO:      g,
+		LastUnlockAt: tptr(r.LastUnlockAt),
 		Progress: progressSummaryDTO{
 			Total:         int(r.Total),
 			Earned:        int(r.Earned),

@@ -33,6 +33,7 @@ type Game struct {
 	CreatedAt           pgtype.Timestamptz
 	UpdatedAt           pgtype.Timestamptz
 	IntegrationID       pgtype.UUID
+	Hero                string
 }
 
 type Integration struct {

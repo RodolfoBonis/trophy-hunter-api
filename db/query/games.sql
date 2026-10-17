@@ -18,9 +18,9 @@ SELECT * FROM games WHERE integration_id = $1 AND external_id = $2;
 -- Em INSERT (jogo novo), has_achievements vem do parâmetro (has_community_visible_stats).
 INSERT INTO games (
     integration_id, platform, external_id, np_service_name, title, normalized_title, icon, cover,
-    platforms, has_achievements, last_played_at, playtime_minutes, updated_at
+    hero, platforms, has_achievements, last_played_at, playtime_minutes, updated_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now()
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now()
 )
 ON CONFLICT (integration_id, external_id) DO UPDATE SET
     np_service_name   = EXCLUDED.np_service_name,
@@ -28,6 +28,7 @@ ON CONFLICT (integration_id, external_id) DO UPDATE SET
     normalized_title  = EXCLUDED.normalized_title,
     icon              = EXCLUDED.icon,
     cover             = EXCLUDED.cover,
+    hero              = EXCLUDED.hero,
     platforms         = EXCLUDED.platforms,
     last_played_at    = EXCLUDED.last_played_at,
     playtime_minutes  = EXCLUDED.playtime_minutes,
