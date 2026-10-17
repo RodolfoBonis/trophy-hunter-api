@@ -46,6 +46,9 @@ type HTTP struct {
 	ReadTimeout     time.Duration `env:"HTTP_READ_TIMEOUT" envDefault:"15s"`
 	WriteTimeout    time.Duration `env:"HTTP_WRITE_TIMEOUT" envDefault:"30s"`
 	ShutdownTimeout time.Duration `env:"HTTP_SHUTDOWN_TIMEOUT" envDefault:"15s"`
+	// CORSAllowedOrigins são as origens (scheme://host[:port]) autorizadas a chamar a API pelo
+	// browser. A API fica em subdomínio próprio (api.<app>.<domínio>), então o PWA é cross-origin.
+	CORSAllowedOrigins []string `env:"CORS_ALLOWED_ORIGINS" envSeparator:","`
 }
 
 // Metrics configura o endpoint de métricas do worker (a API expõe /metrics no próprio HTTP_ADDR).

@@ -19,6 +19,8 @@ type RouterDeps struct {
 	Logger       *slog.Logger
 	ServiceName  string
 	WriteTimeout time.Duration
+	// CORSAllowedOrigins: origens do PWA autorizadas (a API vive em api.<app>.<domínio>).
+	CORSAllowedOrigins []string
 }
 
 // requestTimeout deriva o timeout de request do chi a partir do HTTP_WRITE_TIMEOUT do servidor:
@@ -35,7 +37,8 @@ func requestTimeout(writeTimeout time.Duration) time.Duration {
 }
 
 // NewRouter monta o chi router. /healthz, /readyz e /metrics são abertos (probes/Prometheus);
-// o resto fica sob /api/v1 exigindo autenticação (o web faz proxy de /api → api sem rewrite).
+// o resto fica sob /api/v1 exigindo autenticação. A API é servida no próprio subdomínio
+// (api.<app>.<domínio>) e chamada cross-origin pelo PWA, daí o CORS antes da auth (preflight).
 func NewRouter(d RouterDeps) http.Handler {
 	r := chi.NewRouter()
 
@@ -45,6 +48,7 @@ func NewRouter(d RouterDeps) http.Handler {
 	r.Use(middleware.RequestLogger(d.Logger))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.SecurityHeaders)
+	r.Use(middleware.CORS(d.CORSAllowedOrigins))
 	r.Use(middleware.Tracing(d.ServiceName))
 	r.Use(middleware.Timeout(requestTimeout(d.WriteTimeout)))
 

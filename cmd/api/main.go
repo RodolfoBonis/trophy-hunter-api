@@ -91,6 +91,7 @@ func run() error {
 	router := api.NewRouter(api.RouterDeps{
 		Handlers: handlers, Auth: authenticator, Logger: logger,
 		ServiceName: cfg.Telemetry.ServiceName, WriteTimeout: cfg.HTTP.WriteTimeout,
+		CORSAllowedOrigins: cfg.HTTP.CORSAllowedOrigins,
 	})
 
 	srv := httpserver.New(cfg.HTTP, router, logger)
