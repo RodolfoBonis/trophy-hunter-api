@@ -1,0 +1,23 @@
+{
+  "response": {
+    "game_count": 2,
+    "games": [
+      {
+        "appid": 620,
+        "name": "Portal 2",
+        "playtime_forever": 745,
+        "rtime_last_played": 1700000000,
+        "img_icon_url": "abc123icon",
+        "has_community_visible_stats": true
+      },
+      {
+        "appid": 400,
+        "name": "Portal",
+        "playtime_forever": 120,
+        "rtime_last_played": 1699000000,
+        "img_icon_url": "def456icon",
+        "has_community_visible_stats": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,458 @@
+openapi: 3.1.0
+info:
+  title: Trophy Hunter API
+  version: 0.1.0
+  description: >
+    API pessoal (single-user) para acompanhar conquistas Steam (e, nas próximas fases, troféus
+    PSN). Todas as rotas exigem autenticação (Keycloak realm platform, role trophy-hunter-user)
+    exceto /healthz, /readyz e /metrics. Em dev (AUTH_MODE=dev) use o header X-Debug-User.
+    O web (nginx) faz proxy de /api → esta API sem reescrever o path.
+servers:
+  - url: /api/v1
+    description: Prefixo servido atrás do proxy do container web.
+security:
+  - bearerAuth: []
+tags:
+  - name: me
+  - name: integrations
+  - name: games
+  - name: sync
+paths:
+  /me:
+    get:
+      tags: [me]
+      operationId: getMe
+      summary: Dados do usuário autenticado.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /integrations:
+    get:
+      tags: [integrations]
+      operationId: listIntegrations
+      summary: Lista as integrações conectadas (nunca retorna segredos).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Integration" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /integrations/steam:
+    put:
+      tags: [integrations]
+      operationId: connectSteam
+      summary: Conecta/atualiza a integração Steam.
+      description: >
+        Valida a API key e o SteamID64/vanity contra a Steam, grava as credenciais cifradas e
+        enfileira um full sync. O perfil deve ser público. Nunca retorna a API key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConnectSteamRequest" }
+      responses:
+        "200":
+          description: Integração conectada; full sync enfileirado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Integration" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "502":
+          description: Falha ao validar com a Steam (chave inválida, perfil privado, etc.).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /integrations/{platform}:
+    delete:
+      tags: [integrations]
+      operationId: deleteIntegration
+      summary: Remove a integração de uma plataforma.
+      parameters:
+        - $ref: "#/components/parameters/PlatformPath"
+      responses:
+        "204": { description: Removida. }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /integrations/{platform}/sync:
+    post:
+      tags: [sync]
+      operationId: syncPlatform
+      summary: Enfileira uma sincronização da plataforma.
+      parameters:
+        - $ref: "#/components/parameters/PlatformPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SyncRequest" }
+      responses:
+        "202":
+          description: Sincronização enfileirada (ou já havia uma pendente — ver enqueued).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnqueueResponse" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /games/{id}/sync:
+    post:
+      tags: [sync]
+      operationId: syncGame
+      summary: Enfileira a sincronização de um único jogo.
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      responses:
+        "202":
+          description: Sincronização do jogo enfileirada.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnqueueResponse" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /sync-runs:
+    get:
+      tags: [sync]
+      operationId: listSyncRuns
+      summary: Log de execuções de sincronização.
+      parameters:
+        - name: platform
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Platform" }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SyncRun" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /games:
+    get:
+      tags: [games]
+      operationId: listGames
+      summary: Lista a biblioteca com filtros, ordenação e paginação.
+      parameters:
+        - name: platform
+          in: query
+          schema: { $ref: "#/components/schemas/Platform" }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/GameStatus" }
+        - name: q
+          in: query
+          description: Busca por título (case-insensitive, substring).
+          schema: { type: string }
+        - name: has_achievements
+          in: query
+          description: >
+            Filtra por jogos com/sem conquistas. Default true. Use "all" para não filtrar.
+          schema:
+            type: string
+            enum: ["true", "false", "all"]
+            default: "true"
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [completion, remaining, last_played, title, rarity]
+            default: last_played
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GameListPage" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /games/{id}:
+    get:
+      tags: [games]
+      operationId: getGame
+      summary: Detalhe do jogo com grupos, troféus e progresso.
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GameDetail" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    PlatformPath:
+      name: platform
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Platform" }
+    GameIDPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Problem:
+      description: Erro no formato application/problem+json (RFC 7807).
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+  schemas:
+    Platform:
+      type: string
+      enum: [steam, psn]
+    IntegrationStatus:
+      type: string
+      enum: [connected, needs_reconnect, error_private, error, disabled]
+    GameStatus:
+      type: string
+      enum: [completed, platinum, almost, in_progress, not_started, abandoned]
+    TrophyType:
+      type: string
+      enum: [platinum, gold, silver, bronze, achievement]
+    TrophyTag:
+      type: string
+      enum: [missable, online, grind, difficulty, collectible, buggy]
+    SyncScope:
+      type: string
+      enum: [full, incremental]
+    User:
+      type: object
+      required: [subject]
+      properties:
+        subject: { type: string }
+        email: { type: string }
+        name: { type: string }
+    Integration:
+      type: object
+      required: [platform, status]
+      properties:
+        platform: { $ref: "#/components/schemas/Platform" }
+        status: { $ref: "#/components/schemas/IntegrationStatus" }
+        account_id: { type: string }
+        display_name: { type: string }
+        avatar: { type: string }
+        last_synced_at: { type: [string, "null"], format: date-time }
+        last_error: { type: string }
+    ConnectSteamRequest:
+      type: object
+      required: [api_key, steam_id_or_vanity]
+      properties:
+        api_key:
+          type: string
+          description: Steam Web API key (https://steamcommunity.com/dev/apikey). Nunca é retornada.
+        steam_id_or_vanity:
+          type: string
+          description: SteamID64 (17 dígitos) ou a vanity URL (nome do perfil).
+    SyncRequest:
+      type: object
+      properties:
+        scope:
+          allOf:
+            - $ref: "#/components/schemas/SyncScope"
+          default: incremental
+    EnqueueResponse:
+      type: object
+      required: [enqueued]
+      properties:
+        enqueued:
+          type: boolean
+          description: false quando já havia um job idêntico pendente (dedupe).
+        job_id: { type: [string, "null"], format: uuid }
+    SyncRun:
+      type: object
+      required: [id, platform, scope, trigger, status, started_at]
+      properties:
+        id: { type: string, format: uuid }
+        platform: { $ref: "#/components/schemas/Platform" }
+        scope:
+          type: string
+          enum: [full, incremental, game]
+        trigger:
+          type: string
+          enum: [schedule, manual]
+        status:
+          type: string
+          enum: [running, ok, error]
+        started_at: { type: string, format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+        items_changed: { type: integer }
+        games_touched: { type: integer }
+        error: { type: string }
+    ProgressSummary:
+      type: object
+      required: [total, earned, remaining, completion_pct, status]
+      properties:
+        total: { type: integer }
+        earned: { type: integer }
+        remaining: { type: integer }
+        completion_pct:
+          type: number
+          format: double
+          description: Fração concluída por contagem (0..1).
+        status: { $ref: "#/components/schemas/GameStatus" }
+        has_platinum: { type: boolean }
+        platinum_earned: { type: boolean }
+    ProgressDetail:
+      allOf:
+        - $ref: "#/components/schemas/ProgressSummary"
+        - type: object
+          properties:
+            by_type:
+              type: object
+              additionalProperties:
+                $ref: "#/components/schemas/TypeCount"
+            base:
+              $ref: "#/components/schemas/ProgressBucket"
+            dlc:
+              $ref: "#/components/schemas/ProgressBucket"
+    TypeCount:
+      type: object
+      required: [total, earned]
+      properties:
+        total: { type: integer }
+        earned: { type: integer }
+    ProgressBucket:
+      type: object
+      required: [total, earned, remaining]
+      properties:
+        total: { type: integer }
+        earned: { type: integer }
+        remaining: { type: integer }
+    Game:
+      type: object
+      required: [id, platform, external_id, title, has_achievements]
+      properties:
+        id: { type: string, format: uuid }
+        platform: { $ref: "#/components/schemas/Platform" }
+        external_id: { type: string }
+        np_service_name: { type: [string, "null"] }
+        title: { type: string }
+        icon: { type: string }
+        cover: { type: string }
+        platforms:
+          type: array
+          items: { type: string }
+        has_achievements: { type: boolean }
+        has_platinum: { type: boolean }
+        last_played_at: { type: [string, "null"], format: date-time }
+        playtime_minutes: { type: integer }
+        abandoned: { type: boolean }
+        priority: { type: integer }
+        notes: { type: string }
+        tags:
+          type: array
+          items: { $ref: "#/components/schemas/TrophyTag" }
+    GameListItem:
+      allOf:
+        - $ref: "#/components/schemas/Game"
+        - type: object
+          required: [progress]
+          properties:
+            progress: { $ref: "#/components/schemas/ProgressSummary" }
+    GameListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/GameListItem" }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+    GameDetail:
+      allOf:
+        - $ref: "#/components/schemas/Game"
+        - type: object
+          required: [progress, groups]
+          properties:
+            progress: { $ref: "#/components/schemas/ProgressDetail" }
+            groups:
+              type: array
+              items: { $ref: "#/components/schemas/TrophyGroup" }
+    TrophyGroup:
+      type: object
+      required: [id, external_id, name, is_base, trophies]
+      properties:
+        id: { type: string, format: uuid }
+        external_id: { type: string }
+        name: { type: string }
+        is_base: { type: boolean }
+        icon: { type: string }
+        trophies:
+          type: array
+          items: { $ref: "#/components/schemas/Trophy" }
+    Trophy:
+      type: object
+      required: [id, external_id, name, type, hidden, earned]
+      properties:
+        id: { type: string, format: uuid }
+        external_id: { type: string }
+        name: { type: string }
+        description:
+          type: [string, "null"]
+          description: Null em troféus ocultos sem descrição (spoiler guard).
+        type: { $ref: "#/components/schemas/TrophyType" }
+        hidden: { type: boolean }
+        icon: { type: string }
+        icon_locked: { type: string }
+        rarity_pct: { type: [number, "null"], format: double }
+        earned: { type: boolean }
+        earned_at: { type: [string, "null"], format: date-time }
+        progress: { type: [integer, "null"] }
+        target: { type: [integer, "null"] }
+        priority: { type: integer }
+        notes: { type: string }
+        tags:
+          type: array
+          items: { $ref: "#/components/schemas/TrophyTag" }
+        server_shutdown_risk: { type: boolean }
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        trace_id: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              code: { type: string }

@@ -1,0 +1,25 @@
+{
+  "game": {
+    "gameName": "Portal 2",
+    "gameVersion": "1",
+    "availableGameStats": {
+      "achievements": [
+        {
+          "name": "ACH_WIN_GAME",
+          "displayName": "Venceu o jogo",
+          "hidden": 0,
+          "description": "Complete o jogo.",
+          "icon": "https://cdn.example/ach_win.jpg",
+          "icongray": "https://cdn.example/ach_win_gray.jpg"
+        },
+        {
+          "name": "ACH_SECRET",
+          "displayName": "Segredo",
+          "hidden": 1,
+          "icon": "https://cdn.example/ach_secret.jpg",
+          "icongray": "https://cdn.example/ach_secret_gray.jpg"
+        }
+      ]
+    }
+  }
+}

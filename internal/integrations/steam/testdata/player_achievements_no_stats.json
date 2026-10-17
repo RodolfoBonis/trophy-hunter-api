@@ -1,0 +1,6 @@
+{
+  "playerstats": {
+    "success": false,
+    "error": "Requested app has no stats"
+  }
+}

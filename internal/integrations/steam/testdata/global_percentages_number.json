@@ -1,0 +1,8 @@
+{
+  "achievementpercentages": {
+    "achievements": [
+      { "name": "ACH_WIN_GAME", "percent": 57.4 },
+      { "name": "ACH_SECRET", "percent": 2.1 }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "response": {
+    "players": [
+      {
+        "steamid": "76561197960000000",
+        "personaname": "TrophyHunter",
+        "avatarfull": "https://cdn.example/avatar_full.jpg",
+        "communityvisibilitystate": 3,
+        "profilestate": 1
+      }
+    ]
+  }
+}
