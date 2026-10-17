@@ -66,7 +66,7 @@ func toGameDTO(g dbgen.Game) gameDTO {
 		Title:           g.Title,
 		Icon:            g.Icon,
 		Cover:           g.Cover,
-		Platforms:       g.Platforms,
+		Platforms:       nonNil(g.Platforms),
 		HasAchievements: g.HasAchievements,
 		HasPlatinum:     g.HasPlatinum,
 		LastPlayedAt:    tptr(g.LastPlayedAt),
@@ -74,7 +74,7 @@ func toGameDTO(g dbgen.Game) gameDTO {
 		Abandoned:       g.Abandoned,
 		Priority:        int(g.Priority),
 		Notes:           g.Notes,
-		Tags:            g.Tags,
+		Tags:            nonNil(g.Tags),
 	}
 }
 
@@ -103,7 +103,7 @@ func toListItemDTO(r dbgen.ListGamesRow) gameListItemDTO {
 		Title:           r.Title,
 		Icon:            r.Icon,
 		Cover:           r.Cover,
-		Platforms:       r.Platforms,
+		Platforms:       nonNil(r.Platforms),
 		HasAchievements: r.HasAchievements,
 		HasPlatinum:     r.HasPlatinum,
 		LastPlayedAt:    tptr(r.LastPlayedAt),
@@ -111,7 +111,7 @@ func toListItemDTO(r dbgen.ListGamesRow) gameListItemDTO {
 		Abandoned:       r.Abandoned,
 		Priority:        int(r.Priority),
 		Notes:           r.Notes,
-		Tags:            r.Tags,
+		Tags:            nonNil(r.Tags),
 	}
 	return gameListItemDTO{
 		gameDTO: g,
@@ -172,7 +172,7 @@ func toTrophyDTO(t dbgen.Trophy) trophyDTO {
 		Target:             intPtr(t.Target),
 		Priority:           int(t.Priority),
 		Notes:              t.Notes,
-		Tags:               t.Tags,
+		Tags:               nonNil(t.Tags),
 		ServerShutdownRisk: t.ServerShutdownRisk,
 	}
 }
@@ -242,4 +242,13 @@ func intPtr(p *int32) *int {
 	}
 	v := int(*p)
 	return &v
+}
+
+// nonNil garante que listas saiam como [] no JSON (nunca null): o contrato declara arrays e o
+// front valida com zod — um slice nil vira null e quebra a validação da página inteira.
+func nonNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }
