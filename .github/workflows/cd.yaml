@@ -78,8 +78,7 @@ jobs:
 
       - name: Increment version
         run: |
-          chmod +x ./.config/scripts/increment_version.sh
-          ./.config/scripts/increment_version.sh
+          bash ./.config/scripts/increment_version.sh
           echo "VERSION=$(cat version.txt)" >> $GITHUB_ENV
 
       - name: Add, commit and push version increment
