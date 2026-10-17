@@ -856,8 +856,10 @@ components:
         common: { type: integer }
     GameListItem:
       description: >
-        Um item por jogo (platform + external_id). Game/progress são da conta MAIS AVANÇADA (id =
-        game_id dela); accounts lista todas as contas que possuem o jogo, mais avançada primeiro.
+        Um item por jogo: o jogo unificado (Steam + PSN, cross_platform = true) ou, sem vínculo,
+        platform + external_id. Game/progress são da conta MAIS AVANÇADA — entre plataformas, quando
+        unificado (id = game_id dela); accounts lista as contas da plataforma desse item, mais
+        avançada primeiro. Com filtro de plataforma, aparece a versão daquela plataforma.
       allOf:
         - $ref: "#/components/schemas/Game"
         - type: object

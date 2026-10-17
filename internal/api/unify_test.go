@@ -60,15 +60,33 @@ func TestCrossPlatformUnify(t *testing.T) {
 		ExternalID    string `json:"external_id"`
 		CrossPlatform bool   `json:"cross_platform"`
 	}
-	page := call[struct{ Items []item }](t, e, http.MethodGet, "/api/v1/games?sort=title&has_achievements=all", "", http.StatusOK)
-	byExt := map[string]item{}
-	for _, it := range page.Items {
-		byExt[it.ExternalID] = it
+	type page struct {
+		Items []item
+		Total int
+	}
+	list := func(query string) map[string]item {
+		p := call[page](t, e, http.MethodGet, "/api/v1/games?sort=title&has_achievements=all"+query, "", http.StatusOK)
+		require.Len(t, p.Items, p.Total)
+		out := map[string]item{}
+		for _, it := range p.Items {
+			out[it.ExternalID] = it
+		}
+		return out
+	}
+	// Por plataforma, cada versão aparece; sem filtro, o jogo unificado vira UM card (o mais avançado).
+	byExt := list("&platform=steam")
+	for k, v := range list("&platform=psn") {
+		byExt[k] = v
 	}
 	require.True(t, byExt["620"].CrossPlatform, "Portal 2 (Steam) ↔ Portal 2™ (PSN) — mesmo título normalizado")
 	require.True(t, byExt["NPWR_P2"].CrossPlatform)
 	require.False(t, byExt["NPWR_PK"].CrossPlatform, "Portal Knights não é Portal")
 	require.False(t, byExt["400"].CrossPlatform)
+	all := list("")
+	_, steamP2 := all["620"]
+	_, psnP2 := all["NPWR_P2"]
+	require.True(t, steamP2 != psnP2, "Portal 2 aparece uma vez só na biblioteca")
+	require.Len(t, all, len(byExt)-1)
 
 	type detail struct {
 		CrossPlatform []struct {
@@ -91,6 +109,7 @@ func TestCrossPlatformUnify(t *testing.T) {
 	d = call[detail](t, e, http.MethodGet, "/api/v1/games/"+byExt["620"].ID, "", http.StatusOK)
 	require.Empty(t, d.CrossPlatform)
 	require.True(t, d.UnifyLocked)
+	require.Len(t, list(""), len(byExt), "desvinculado, volta a ter um card por plataforma")
 
 	// Candidatos da outra plataforma e vínculo manual (Portal Steam ↔ Portal Knights PSN).
 	cands := call[[]struct {

@@ -75,11 +75,14 @@ WITH agg AS (
         COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct >= 20 AND t.rarity_pct < 50)  AS uncommon_earned,
         COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct >= 50)                        AS common_earned,
         -- Também existe em outra plataforma (unificado)?
-        EXISTS (SELECT 1 FROM games o WHERE o.unified_game_id = g.unified_game_id AND o.platform <> g.platform) AS cross_platform
+        EXISTS (SELECT 1 FROM games o WHERE o.unified_game_id = g.unified_game_id AND o.platform <> g.platform) AS cross_platform,
+        -- Um card por jogo: o unificado (Steam + PSN) ou, sem vínculo, a chave da plataforma.
+        COALESCE(g.unified_game_id::text, g.platform || ':' || g.external_id)::text AS group_key
     FROM games g
     JOIN integrations i ON i.id = g.integration_id
     LEFT JOIN trophies t ON t.game_id = g.id
     WHERE (sqlc.narg(integration_id)::uuid IS NULL OR g.integration_id = sqlc.narg(integration_id)::uuid)
+      AND (sqlc.narg(platform)::text IS NULL OR g.platform = sqlc.narg(platform)::text)
     GROUP BY g.id, i.label
 ),
 scored AS (
@@ -100,12 +103,12 @@ ranked AS (
         ROW_NUMBER() OVER w AS account_rank,
         COUNT(*) OVER (PARTITION BY platform, external_id) AS account_count
     FROM scored
-    WINDOW w AS (PARTITION BY platform, external_id
+    -- A conta (e, se unificado, a plataforma) mais avançada representa o jogo.
+    WINDOW w AS (PARTITION BY group_key
                  ORDER BY completion_pct DESC, earned DESC, last_unlock_at DESC NULLS LAST, id)
 )
 SELECT * FROM ranked
 WHERE account_rank = 1
-  AND (sqlc.narg(platform)::text IS NULL OR platform = sqlc.narg(platform)::text)
   AND (sqlc.narg(has_achievements)::boolean IS NULL OR has_achievements = sqlc.narg(has_achievements)::boolean)
   AND (sqlc.narg(q)::text IS NULL OR normalized_title ILIKE '%' || sqlc.narg(q)::text || '%' ESCAPE '\')
   AND (sqlc.narg(status)::text IS NULL OR status_bucket = sqlc.narg(status)::text)
@@ -122,12 +125,14 @@ LIMIT sqlc.arg(lim) OFFSET sqlc.arg(off);
 -- name: CountGames :one
 WITH agg AS (
     SELECT g.id, g.platform, g.external_id, g.has_achievements, g.normalized_title, g.abandoned,
+        COALESCE(g.unified_game_id::text, g.platform || ':' || g.external_id)::text AS group_key,
         COUNT(t.id)                         AS total,
         COUNT(t.id) FILTER (WHERE t.earned) AS earned,
         MAX(t.earned_at)::timestamptz       AS last_unlock_at
     FROM games g
     LEFT JOIN trophies t ON t.game_id = g.id
     WHERE (sqlc.narg(integration_id)::uuid IS NULL OR g.integration_id = sqlc.narg(integration_id)::uuid)
+      AND (sqlc.narg(platform)::text IS NULL OR g.platform = sqlc.narg(platform)::text)
     GROUP BY g.id
 ),
 scored AS (
@@ -144,13 +149,12 @@ scored AS (
 ),
 ranked AS (
     SELECT *,
-        ROW_NUMBER() OVER (PARTITION BY platform, external_id
+        ROW_NUMBER() OVER (PARTITION BY group_key
                            ORDER BY completion_pct DESC, earned DESC, last_unlock_at DESC NULLS LAST, id) AS account_rank
     FROM scored
 )
 SELECT COUNT(*) FROM ranked
 WHERE account_rank = 1
-  AND (sqlc.narg(platform)::text IS NULL OR platform = sqlc.narg(platform)::text)
   AND (sqlc.narg(has_achievements)::boolean IS NULL OR has_achievements = sqlc.narg(has_achievements)::boolean)
   AND (sqlc.narg(q)::text IS NULL OR normalized_title ILIKE '%' || sqlc.narg(q)::text || '%' ESCAPE '\')
   AND (sqlc.narg(status)::text IS NULL OR status_bucket = sqlc.narg(status)::text);

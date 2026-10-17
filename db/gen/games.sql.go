@@ -14,16 +14,18 @@ import (
 const countGames = `-- name: CountGames :one
 WITH agg AS (
     SELECT g.id, g.platform, g.external_id, g.has_achievements, g.normalized_title, g.abandoned,
+        COALESCE(g.unified_game_id::text, g.platform || ':' || g.external_id)::text AS group_key,
         COUNT(t.id)                         AS total,
         COUNT(t.id) FILTER (WHERE t.earned) AS earned,
         MAX(t.earned_at)::timestamptz       AS last_unlock_at
     FROM games g
     LEFT JOIN trophies t ON t.game_id = g.id
-    WHERE ($5::uuid IS NULL OR g.integration_id = $5::uuid)
+    WHERE ($4::uuid IS NULL OR g.integration_id = $4::uuid)
+      AND ($5::text IS NULL OR g.platform = $5::text)
     GROUP BY g.id
 ),
 scored AS (
-    SELECT id, platform, external_id, has_achievements, normalized_title, abandoned, total, earned, last_unlock_at,
+    SELECT id, platform, external_id, has_achievements, normalized_title, abandoned, group_key, total, earned, last_unlock_at,
         (CASE WHEN total > 0 THEN earned::float8 / total ELSE 0 END)::float8 AS completion_pct,
         CASE
             WHEN abandoned                                      THEN 'abandoned'
@@ -35,35 +37,34 @@ scored AS (
     FROM agg
 ),
 ranked AS (
-    SELECT id, platform, external_id, has_achievements, normalized_title, abandoned, total, earned, last_unlock_at, completion_pct, status_bucket,
-        ROW_NUMBER() OVER (PARTITION BY platform, external_id
+    SELECT id, platform, external_id, has_achievements, normalized_title, abandoned, group_key, total, earned, last_unlock_at, completion_pct, status_bucket,
+        ROW_NUMBER() OVER (PARTITION BY group_key
                            ORDER BY completion_pct DESC, earned DESC, last_unlock_at DESC NULLS LAST, id) AS account_rank
     FROM scored
 )
 SELECT COUNT(*) FROM ranked
 WHERE account_rank = 1
-  AND ($1::text IS NULL OR platform = $1::text)
-  AND ($2::boolean IS NULL OR has_achievements = $2::boolean)
-  AND ($3::text IS NULL OR normalized_title ILIKE '%' || $3::text || '%' ESCAPE '\')
-  AND ($4::text IS NULL OR status_bucket = $4::text)
+  AND ($1::boolean IS NULL OR has_achievements = $1::boolean)
+  AND ($2::text IS NULL OR normalized_title ILIKE '%' || $2::text || '%' ESCAPE '\')
+  AND ($3::text IS NULL OR status_bucket = $3::text)
 `
 
 type CountGamesParams struct {
-	Platform        *string
 	HasAchievements *bool
 	Q               *string
 	Status          *string
 	IntegrationID   pgtype.UUID
+	Platform        *string
 	Almost          float64
 }
 
 func (q *Queries) CountGames(ctx context.Context, arg CountGamesParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countGames,
-		arg.Platform,
 		arg.HasAchievements,
 		arg.Q,
 		arg.Status,
 		arg.IntegrationID,
+		arg.Platform,
 		arg.Almost,
 	)
 	var count int64
@@ -262,15 +263,18 @@ WITH agg AS (
         COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct >= 20 AND t.rarity_pct < 50)  AS uncommon_earned,
         COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct >= 50)                        AS common_earned,
         -- Também existe em outra plataforma (unificado)?
-        EXISTS (SELECT 1 FROM games o WHERE o.unified_game_id = g.unified_game_id AND o.platform <> g.platform) AS cross_platform
+        EXISTS (SELECT 1 FROM games o WHERE o.unified_game_id = g.unified_game_id AND o.platform <> g.platform) AS cross_platform,
+        -- Um card por jogo: o unificado (Steam + PSN) ou, sem vínculo, a chave da plataforma.
+        COALESCE(g.unified_game_id::text, g.platform || ':' || g.external_id)::text AS group_key
     FROM games g
     JOIN integrations i ON i.id = g.integration_id
     LEFT JOIN trophies t ON t.game_id = g.id
-    WHERE ($8::uuid IS NULL OR g.integration_id = $8::uuid)
+    WHERE ($7::uuid IS NULL OR g.integration_id = $7::uuid)
+      AND ($8::text IS NULL OR g.platform = $8::text)
     GROUP BY g.id, i.label
 ),
 scored AS (
-    SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, unify_locked, account_label, total, earned, avg_remaining_rarity, last_unlock_at, platinum_total, platinum_earned, gold_total, gold_earned, silver_total, silver_earned, bronze_total, bronze_earned, legendary_earned, epic_earned, rare_earned, uncommon_earned, common_earned, cross_platform,
+    SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, unify_locked, account_label, total, earned, avg_remaining_rarity, last_unlock_at, platinum_total, platinum_earned, gold_total, gold_earned, silver_total, silver_earned, bronze_total, bronze_earned, legendary_earned, epic_earned, rare_earned, uncommon_earned, common_earned, cross_platform, group_key,
         (total - earned)::bigint                                             AS remaining,
         (CASE WHEN total > 0 THEN earned::float8 / total ELSE 0 END)::float8 AS completion_pct,
         CASE
@@ -283,32 +287,31 @@ scored AS (
     FROM agg
 ),
 ranked AS (
-    SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, unify_locked, account_label, total, earned, avg_remaining_rarity, last_unlock_at, platinum_total, platinum_earned, gold_total, gold_earned, silver_total, silver_earned, bronze_total, bronze_earned, legendary_earned, epic_earned, rare_earned, uncommon_earned, common_earned, cross_platform, remaining, completion_pct, status_bucket,
+    SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, unify_locked, account_label, total, earned, avg_remaining_rarity, last_unlock_at, platinum_total, platinum_earned, gold_total, gold_earned, silver_total, silver_earned, bronze_total, bronze_earned, legendary_earned, epic_earned, rare_earned, uncommon_earned, common_earned, cross_platform, group_key, remaining, completion_pct, status_bucket,
         ROW_NUMBER() OVER w AS account_rank,
         COUNT(*) OVER (PARTITION BY platform, external_id) AS account_count
     FROM scored
-    WINDOW w AS (PARTITION BY platform, external_id
+    -- A conta (e, se unificado, a plataforma) mais avançada representa o jogo.
+    WINDOW w AS (PARTITION BY group_key
                  ORDER BY completion_pct DESC, earned DESC, last_unlock_at DESC NULLS LAST, id)
 )
-SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, unify_locked, account_label, total, earned, avg_remaining_rarity, last_unlock_at, platinum_total, platinum_earned, gold_total, gold_earned, silver_total, silver_earned, bronze_total, bronze_earned, legendary_earned, epic_earned, rare_earned, uncommon_earned, common_earned, cross_platform, remaining, completion_pct, status_bucket, account_rank, account_count FROM ranked
+SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, unify_locked, account_label, total, earned, avg_remaining_rarity, last_unlock_at, platinum_total, platinum_earned, gold_total, gold_earned, silver_total, silver_earned, bronze_total, bronze_earned, legendary_earned, epic_earned, rare_earned, uncommon_earned, common_earned, cross_platform, group_key, remaining, completion_pct, status_bucket, account_rank, account_count FROM ranked
 WHERE account_rank = 1
-  AND ($1::text IS NULL OR platform = $1::text)
-  AND ($2::boolean IS NULL OR has_achievements = $2::boolean)
-  AND ($3::text IS NULL OR normalized_title ILIKE '%' || $3::text || '%' ESCAPE '\')
-  AND ($4::text IS NULL OR status_bucket = $4::text)
+  AND ($1::boolean IS NULL OR has_achievements = $1::boolean)
+  AND ($2::text IS NULL OR normalized_title ILIKE '%' || $2::text || '%' ESCAPE '\')
+  AND ($3::text IS NULL OR status_bucket = $3::text)
 ORDER BY
-    (CASE WHEN $5::text = 'title'      THEN normalized_title     END) ASC  NULLS LAST,
-    (CASE WHEN $5::text = 'completion' THEN completion_pct       END) DESC NULLS LAST,
-    (CASE WHEN $5::text = 'remaining'  THEN remaining            END) ASC  NULLS LAST,
-    (CASE WHEN $5::text = 'rarity'     THEN avg_remaining_rarity END) DESC NULLS LAST,
-    (CASE WHEN $5::text NOT IN ('title','completion','remaining','rarity')
+    (CASE WHEN $4::text = 'title'      THEN normalized_title     END) ASC  NULLS LAST,
+    (CASE WHEN $4::text = 'completion' THEN completion_pct       END) DESC NULLS LAST,
+    (CASE WHEN $4::text = 'remaining'  THEN remaining            END) ASC  NULLS LAST,
+    (CASE WHEN $4::text = 'rarity'     THEN avg_remaining_rarity END) DESC NULLS LAST,
+    (CASE WHEN $4::text NOT IN ('title','completion','remaining','rarity')
           THEN last_played_at END) DESC NULLS LAST,
     id
-LIMIT $7 OFFSET $6
+LIMIT $6 OFFSET $5
 `
 
 type ListGamesParams struct {
-	Platform        *string
 	HasAchievements *bool
 	Q               *string
 	Status          *string
@@ -316,6 +319,7 @@ type ListGamesParams struct {
 	Off             int32
 	Lim             int32
 	IntegrationID   pgtype.UUID
+	Platform        *string
 	Almost          float64
 }
 
@@ -365,6 +369,7 @@ type ListGamesRow struct {
 	UncommonEarned      int64
 	CommonEarned        int64
 	CrossPlatform       bool
+	GroupKey            string
 	Remaining           int64
 	CompletionPct       float64
 	StatusBucket        string
@@ -379,7 +384,6 @@ type ListGamesRow struct {
 // Esta é a mesma regra das estatísticas: somar contas, mas cada jogo conta uma vez (o best).
 func (q *Queries) ListGames(ctx context.Context, arg ListGamesParams) ([]ListGamesRow, error) {
 	rows, err := q.db.Query(ctx, listGames,
-		arg.Platform,
 		arg.HasAchievements,
 		arg.Q,
 		arg.Status,
@@ -387,6 +391,7 @@ func (q *Queries) ListGames(ctx context.Context, arg ListGamesParams) ([]ListGam
 		arg.Off,
 		arg.Lim,
 		arg.IntegrationID,
+		arg.Platform,
 		arg.Almost,
 	)
 	if err != nil {
@@ -442,6 +447,7 @@ func (q *Queries) ListGames(ctx context.Context, arg ListGamesParams) ([]ListGam
 			&i.UncommonEarned,
 			&i.CommonEarned,
 			&i.CrossPlatform,
+			&i.GroupKey,
 			&i.Remaining,
 			&i.CompletionPct,
 			&i.StatusBucket,
