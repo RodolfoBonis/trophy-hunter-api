@@ -30,6 +30,9 @@ const (
 	KindBadGateway
 	// KindNotImplemented sinaliza um recurso opcional não configurado no deployment. Status 501.
 	KindNotImplemented
+	// KindUnavailable sinaliza indisponibilidade temporária (ex.: provider OIDC ainda carregando).
+	// Status 503 — o cliente pode re-tentar em instantes.
+	KindUnavailable
 )
 
 func (k Kind) status() int {
@@ -52,6 +55,8 @@ func (k Kind) status() int {
 		return http.StatusBadGateway
 	case KindNotImplemented:
 		return http.StatusNotImplemented
+	case KindUnavailable:
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}
@@ -77,6 +82,8 @@ func (k Kind) slug() string {
 		return "bad-gateway"
 	case KindNotImplemented:
 		return "not-implemented"
+	case KindUnavailable:
+		return "unavailable"
 	default:
 		return "internal"
 	}
@@ -123,6 +130,15 @@ func Wrap(kind Kind, title string, err error) *Error {
 // Validation cria um erro de validação (422) com os campos que falharam.
 func Validation(detail string, fields ...FieldError) *Error {
 	return &Error{Kind: KindValidation, Title: "Validation failed", Detail: detail, Fields: fields}
+}
+
+// AsError extrai o *Error da cadeia (false se não houver um).
+func AsError(err error) (*Error, bool) {
+	var appErr *Error
+	if errors.As(err, &appErr) {
+		return appErr, true
+	}
+	return nil, false
 }
 
 // Problem é a representação RFC 7807 serializada na resposta.

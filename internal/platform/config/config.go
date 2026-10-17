@@ -8,6 +8,8 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/caarlos0/env/v11"
@@ -68,10 +70,12 @@ type Redis struct {
 
 // Auth configura a validação dos tokens (Keycloak, OIDC/JWT) do realm platform.
 //
-//   - Mode "dev" confia no header X-Debug-User (dev local, sem Keycloak); "oidc" valida o JWT
-//     contra o JWKS do Issuer, conferindo iss, aud (Audience) e a role exigida em realm_access.roles.
+//   - Mode "oidc" (default) valida o JWT contra o JWKS do Issuer, conferindo iss, aud (Audience)
+//     e a role exigida em realm_access.roles.
+//   - Mode "dev" confia no header X-Debug-User (dev local, sem Keycloak). É aceito SOMENTE quando
+//     APP_ENV=dev e AUTH_ISSUER está vazio — nunca escorrega para produção por engano.
 type Auth struct {
-	Mode         AuthMode `env:"AUTH_MODE" envDefault:"dev"`
+	Mode         AuthMode `env:"AUTH_MODE" envDefault:"oidc"`
 	Issuer       string   `env:"AUTH_ISSUER" envDefault:""`
 	Audience     string   `env:"AUTH_AUDIENCE" envDefault:"trophy-hunter-api"`
 	RequiredRole string   `env:"AUTH_REQUIRED_ROLE" envDefault:"trophy-hunter-user"`
@@ -81,10 +85,16 @@ type Auth struct {
 //
 // Key é a chave em claro (32 bytes) já decodificada de TOKEN_ENC_KEY (base64). KeyVersion
 // prefixa o ciphertext para permitir rotação. A chave NUNCA é logada.
+//
+// OldKeysB64 traz chaves antigas (rotação) no formato "version:base64,version:base64" — usadas
+// SÓ para decifrar blobs ainda cifrados com elas; a cifragem nova usa sempre a chave primária.
 type Crypto struct {
 	KeyB64     string `env:"TOKEN_ENC_KEY,required"`
 	KeyVersion int    `env:"TOKEN_ENC_KEY_VERSION" envDefault:"1"`
+	OldKeysB64 string `env:"TOKEN_ENC_KEYS_OLD" envDefault:""`
 	Key        []byte `env:"-"`
+	// OldKeys mapeia version → chave (32 bytes) decodificada de OldKeysB64.
+	OldKeys map[int][]byte `env:"-"`
 }
 
 // Telemetry configura logs e OpenTelemetry (exporter desligado por default).
@@ -96,20 +106,25 @@ type Telemetry struct {
 }
 
 // Sync configura o scheduler de sincronização (no worker).
+//
+// JobTimeout é o orçamento por job na fila. Com o fan-out (sync_platform só lista a biblioteca e
+// emite um sync_game por jogo), cada job é pequeno; o default cobre folgado mesmo com STEAM_RPS baixo.
 type Sync struct {
-	Enabled  bool          `env:"SYNC_ENABLED" envDefault:"true"`
-	Interval time.Duration `env:"SYNC_INTERVAL" envDefault:"6h"`
+	Enabled    bool          `env:"SYNC_ENABLED" envDefault:"true"`
+	Interval   time.Duration `env:"SYNC_INTERVAL" envDefault:"6h"`
+	JobTimeout time.Duration `env:"JOB_TIMEOUT" envDefault:"5m"`
 }
 
 // Steam configura o cliente da Steam Web API.
 //
 //   - BaseURL é configurável para apontar a um servidor fake em testes/smoke (STEAM_API_BASE_URL).
 //   - Lang é o idioma dos textos (l=; default "brazilian").
-//   - RPS é o teto de requests por segundo do token bucket por processo.
+//   - RPS é o teto de requests por segundo do token bucket por processo. Com o fan-out, cada
+//     sync_game faz ~3 chamadas; 4 rps mantém o sync responsivo sem estourar a cota da Steam.
 type Steam struct {
 	BaseURL string  `env:"STEAM_API_BASE_URL" envDefault:"https://api.steampowered.com"`
 	Lang    string  `env:"STEAM_LANG" envDefault:"brazilian"`
-	RPS     float64 `env:"STEAM_RPS" envDefault:"1"`
+	RPS     float64 `env:"STEAM_RPS" envDefault:"4"`
 }
 
 // Load lê a configuração do ambiente, valida campos obrigatórios e decodifica a chave mestra.
@@ -118,8 +133,8 @@ func Load() (Config, error) {
 	if err := env.Parse(&cfg); err != nil {
 		return Config{}, fmt.Errorf("carregar config: %w", err)
 	}
-	if cfg.Auth.Mode == AuthModeOIDC && cfg.Auth.Issuer == "" {
-		return Config{}, fmt.Errorf("carregar config: AUTH_ISSUER é obrigatório quando AUTH_MODE=oidc")
+	if err := validateAuth(cfg); err != nil {
+		return Config{}, err
 	}
 	key, err := base64.StdEncoding.DecodeString(cfg.Crypto.KeyB64)
 	if err != nil {
@@ -130,13 +145,80 @@ func Load() (Config, error) {
 	}
 	cfg.Crypto.Key = key
 	cfg.Crypto.KeyB64 = "" // não manter o segredo em memória após decodificar
+
+	oldKeys, err := parseOldKeys(cfg.Crypto.OldKeysB64)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Crypto.OldKeys = oldKeys
+	cfg.Crypto.OldKeysB64 = ""
+
 	if cfg.Steam.RPS <= 0 {
 		return Config{}, fmt.Errorf("carregar config: STEAM_RPS deve ser > 0")
 	}
 	if cfg.WorkerConcurrency <= 0 {
 		return Config{}, fmt.Errorf("carregar config: WORKER_CONCURRENCY deve ser > 0")
 	}
+	if cfg.Sync.JobTimeout <= 0 {
+		return Config{}, fmt.Errorf("carregar config: JOB_TIMEOUT deve ser > 0")
+	}
 	return cfg, nil
+}
+
+// validateAuth aplica a política de segurança do modo de autenticação (ver type Auth).
+func validateAuth(cfg Config) error {
+	switch cfg.Auth.Mode {
+	case AuthModeOIDC:
+		if cfg.Auth.Issuer == "" {
+			return fmt.Errorf("carregar config: AUTH_ISSUER é obrigatório quando AUTH_MODE=oidc")
+		}
+		if cfg.Auth.Audience == "" {
+			return fmt.Errorf("carregar config: AUTH_AUDIENCE é obrigatório quando AUTH_MODE=oidc")
+		}
+		return nil
+	case AuthModeDev:
+		// dev bypass só é aceito em dev local e sem issuer configurado (evita escorregar p/ prod).
+		if cfg.Env != "dev" {
+			return fmt.Errorf("carregar config: AUTH_MODE=dev só é permitido com APP_ENV=dev (APP_ENV=%q)", cfg.Env)
+		}
+		if cfg.Auth.Issuer != "" {
+			return fmt.Errorf("carregar config: AUTH_MODE=dev exige AUTH_ISSUER vazio (há um issuer configurado — use AUTH_MODE=oidc)")
+		}
+		return nil
+	default:
+		return fmt.Errorf("carregar config: AUTH_MODE inválido %q (use oidc ou dev)", cfg.Auth.Mode)
+	}
+}
+
+// parseOldKeys decodifica TOKEN_ENC_KEYS_OLD ("v:base64,v:base64") em version → chave de 32 bytes.
+func parseOldKeys(raw string) (map[int][]byte, error) {
+	out := map[int][]byte{}
+	if raw == "" {
+		return out, nil
+	}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		version, keyB64, ok := strings.Cut(entry, ":")
+		if !ok {
+			return nil, fmt.Errorf("carregar config: TOKEN_ENC_KEYS_OLD inválido (esperado version:base64)")
+		}
+		v, err := strconv.Atoi(strings.TrimSpace(version))
+		if err != nil {
+			return nil, fmt.Errorf("carregar config: TOKEN_ENC_KEYS_OLD com versão inválida")
+		}
+		keyBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(keyB64))
+		if err != nil {
+			return nil, fmt.Errorf("carregar config: TOKEN_ENC_KEYS_OLD versão %d não é base64 válido", v)
+		}
+		if len(keyBytes) != 32 {
+			return nil, fmt.Errorf("carregar config: TOKEN_ENC_KEYS_OLD versão %d deve ter 32 bytes, tem %d", v, len(keyBytes))
+		}
+		out[v] = keyBytes
+	}
+	return out, nil
 }
 
 // IsProd indica se o serviço roda em produção.
