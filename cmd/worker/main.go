@@ -1,0 +1,135 @@
+// Command worker processa a fila de jobs (sync_platform, sync_game) e agenda syncs incrementais.
+// Expõe /metrics e /healthz em METRICS_ADDR. Mesma imagem do api; o deployment sobrescreve o command.
+package main
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+
+	trophyhunter "github.com/RodolfoBonis/trophy-hunter-api"
+	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
+	migrations "github.com/RodolfoBonis/trophy-hunter-api/db/migrations"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steam"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/config"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/crypto"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/db"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/httpserver"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/metrics"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
+	redisplat "github.com/RodolfoBonis/trophy-hunter-api/internal/platform/redis"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/telemetry"
+	syncpkg "github.com/RodolfoBonis/trophy-hunter-api/internal/sync"
+
+	"github.com/redis/go-redis/v9"
+)
+
+func main() {
+	if err := run(); err != nil {
+		slog.Error("fatal", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	logger := telemetry.NewLogger(cfg.Telemetry)
+	slog.SetDefault(logger)
+	logger.Info("iniciando worker", slog.String("version", trophyhunter.Version()))
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	shutdownTracing, err := telemetry.SetupTracing(ctx, cfg.Telemetry)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = shutdownTracing(context.WithoutCancel(ctx)) }()
+
+	if cfg.DB.MigrateOnStart {
+		if err := db.Migrate(ctx, cfg.DB.URL, migrations.FS); err != nil {
+			return err
+		}
+	}
+
+	pool, err := db.NewPool(ctx, cfg.DB)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	cipher, err := crypto.New(cfg.Crypto.KeyVersion, cfg.Crypto.Key)
+	if err != nil {
+		return err
+	}
+
+	// Redis é opcional: o scheduler degrada para single-replica se indisponível.
+	var rdb *redis.Client
+	if rc, rerr := redisplat.New(ctx, cfg.Redis); rerr != nil {
+		logger.Warn("redis indisponível; scheduler sem lock entre réplicas", slog.String("err", rerr.Error()))
+	} else {
+		rdb = rc
+		defer func() { _ = rdb.Close() }()
+	}
+
+	queries := dbgen.New(pool)
+	jobs := queue.NewPostgres(pool, queue.DefaultBackoff)
+	steamFactory := func(apiKey string) syncpkg.SteamAPI {
+		return steam.New(steam.Options{BaseURL: cfg.Steam.BaseURL, APIKey: apiKey, Lang: cfg.Steam.Lang, RPS: cfg.Steam.RPS, Logger: logger})
+	}
+	syncer := syncpkg.New(syncpkg.Deps{
+		Queries: queries, Pool: pool, Queue: jobs, Cipher: cipher,
+		SteamFactory: steamFactory, Logger: logger,
+	})
+
+	worker := syncpkg.NewWorker(jobs, syncer, cfg.WorkerConcurrency, logger)
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		worker.Run(ctx)
+	}()
+
+	if cfg.Sync.Enabled {
+		scheduler := syncpkg.NewScheduler(syncer, rdb, queries, cfg.Sync.Interval, logger)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			scheduler.Run(ctx)
+		}()
+	}
+
+	// Servidor de métricas/health do worker.
+	metricsSrv := httpserver.NewAddr(cfg.Metrics.Addr, metricsMux(), logger)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if merr := metricsSrv.Run(ctx); merr != nil {
+			logger.Error("metrics server parou com erro", slog.String("err", merr.Error()))
+		}
+	}()
+
+	<-ctx.Done()
+	wg.Wait()
+	return nil
+}
+
+func metricsMux() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler())
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	return mux
+}
