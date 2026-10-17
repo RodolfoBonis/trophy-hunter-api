@@ -118,11 +118,59 @@ func TestRetryOn429ThenSuccess(t *testing.T) {
 	require.Equal(t, int32(2), calls.Load(), "deve ter retentado uma vez após o 429")
 }
 
+func TestRetryAfterHonored(t *testing.T) {
+	var calls atomic.Int32
+	body := fixture(t, "owned_games.json")
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Retry-After", "0") // imediato
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	games, err := c.GetOwnedGames(context.Background(), "steamid")
+	require.NoError(t, err)
+	require.Len(t, games, 2)
+	require.Equal(t, int32(2), calls.Load())
+}
+
 func TestInvalidKey(t *testing.T) {
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
 	_, err := c.GetPlayerSummary(context.Background(), "steamid")
+	require.ErrorIs(t, err, steam.ErrInvalidKey)
+}
+
+// TestForbiddenBodyClassifiedAsPrivate: um 403 com corpo "Profile is not public" é perfil privado,
+// NÃO chave inválida (finding 7).
+func TestForbiddenBodyClassifiedAsPrivate(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<html><body><h1>Forbidden</h1>Profile is not public</body></html>`))
+	}))
+	_, err := c.GetPlayerAchievements(context.Background(), "steamid", 620)
+	require.ErrorIs(t, err, steam.ErrProfilePrivate)
+}
+
+// TestBadRequestBodyClassifiedAsNoStats: um 400 com "Requested app has no stats" vira ErrNoStats.
+func TestBadRequestBodyClassifiedAsNoStats(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"playerstats":{"error":"Requested app has no stats"}}`))
+	}))
+	_, err := c.GetPlayerAchievements(context.Background(), "steamid", 620)
+	require.ErrorIs(t, err, steam.ErrNoStats)
+}
+
+// TestForbiddenNoBodyIsInvalidKey: 403 sem mensagem de domínio continua sendo chave inválida.
+func TestForbiddenNoBodyIsInvalidKey(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`access denied`))
+	}))
+	_, err := c.GetOwnedGames(context.Background(), "steamid")
 	require.ErrorIs(t, err, steam.ErrInvalidKey)
 }
 
