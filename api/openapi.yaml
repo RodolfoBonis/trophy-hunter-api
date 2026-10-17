@@ -443,14 +443,24 @@ components:
         progress: { $ref: "#/components/schemas/ProgressSummary" }
     TypeCounts:
       type: object
-      description: Troféus ganhos/total por tipo (PSN) e conquistas raras ganhas (< 5%) — contadores do card.
-      required: [platinum, gold, silver, bronze, rare_earned]
+      description: Troféus ganhos/total por tipo (PSN) e ganhos por tier de raridade — contadores do card.
+      required: [platinum, gold, silver, bronze, rarity]
       properties:
         platinum: { $ref: "#/components/schemas/TypeCount" }
         gold: { $ref: "#/components/schemas/TypeCount" }
         silver: { $ref: "#/components/schemas/TypeCount" }
         bronze: { $ref: "#/components/schemas/TypeCount" }
-        rare_earned: { type: integer }
+        rarity: { $ref: "#/components/schemas/RarityEarned" }
+    RarityEarned:
+      type: object
+      description: "Troféus GANHOS por tier — lendário < 1%, épico 1–5%, raro 5–20%, incomum 20–50%, comum ≥ 50%."
+      required: [legendary, epic, rare, uncommon, common]
+      properties:
+        legendary: { type: integer }
+        epic: { type: integer }
+        rare: { type: integer }
+        uncommon: { type: integer }
+        common: { type: integer }
     GameListItem:
       description: >
         Um item por jogo (platform + external_id). Game/progress são da conta MAIS AVANÇADA (id =

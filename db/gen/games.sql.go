@@ -244,7 +244,7 @@ WITH agg AS (
         COUNT(t.id) FILTER (WHERE t.earned)                                AS earned,
         COALESCE(AVG(t.rarity_pct) FILTER (WHERE NOT t.earned), 0)::float8  AS avg_remaining_rarity,
         MAX(t.earned_at)::timestamptz                                      AS last_unlock_at,
-        -- Contagens por tipo (PSN) e conquistas raras ganhas (< 5% dos jogadores) p/ o card.
+        -- Contagens por tipo (PSN) e por tier de raridade p/ o card.
         COUNT(t.id) FILTER (WHERE t.type = 'platinum')                     AS platinum_total,
         COUNT(t.id) FILTER (WHERE t.type = 'platinum' AND t.earned)        AS platinum_earned,
         COUNT(t.id) FILTER (WHERE t.type = 'gold')                         AS gold_total,
@@ -253,7 +253,12 @@ WITH agg AS (
         COUNT(t.id) FILTER (WHERE t.type = 'silver' AND t.earned)          AS silver_earned,
         COUNT(t.id) FILTER (WHERE t.type = 'bronze')                       AS bronze_total,
         COUNT(t.id) FILTER (WHERE t.type = 'bronze' AND t.earned)          AS bronze_earned,
-        COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct < 5)           AS rare_earned
+        -- Ganhas por tier de raridade (mesmos cortes do front/style tile: <1, <5, <20, <50, resto).
+        COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct < 1)                          AS legendary_earned,
+        COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct >= 1 AND t.rarity_pct < 5)    AS epic_earned,
+        COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct >= 5 AND t.rarity_pct < 20)   AS rare_earned,
+        COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct >= 20 AND t.rarity_pct < 50)  AS uncommon_earned,
+        COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct >= 50)                        AS common_earned
     FROM games g
     JOIN integrations i ON i.id = g.integration_id
     LEFT JOIN trophies t ON t.game_id = g.id
@@ -261,7 +266,7 @@ WITH agg AS (
     GROUP BY g.id, i.label
 ),
 scored AS (
-    SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, account_label, total, earned, avg_remaining_rarity, last_unlock_at, platinum_total, platinum_earned, gold_total, gold_earned, silver_total, silver_earned, bronze_total, bronze_earned, rare_earned,
+    SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, account_label, total, earned, avg_remaining_rarity, last_unlock_at, platinum_total, platinum_earned, gold_total, gold_earned, silver_total, silver_earned, bronze_total, bronze_earned, legendary_earned, epic_earned, rare_earned, uncommon_earned, common_earned,
         (total - earned)::bigint                                             AS remaining,
         (CASE WHEN total > 0 THEN earned::float8 / total ELSE 0 END)::float8 AS completion_pct,
         CASE
@@ -274,14 +279,14 @@ scored AS (
     FROM agg
 ),
 ranked AS (
-    SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, account_label, total, earned, avg_remaining_rarity, last_unlock_at, platinum_total, platinum_earned, gold_total, gold_earned, silver_total, silver_earned, bronze_total, bronze_earned, rare_earned, remaining, completion_pct, status_bucket,
+    SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, account_label, total, earned, avg_remaining_rarity, last_unlock_at, platinum_total, platinum_earned, gold_total, gold_earned, silver_total, silver_earned, bronze_total, bronze_earned, legendary_earned, epic_earned, rare_earned, uncommon_earned, common_earned, remaining, completion_pct, status_bucket,
         ROW_NUMBER() OVER w AS account_rank,
         COUNT(*) OVER (PARTITION BY platform, external_id) AS account_count
     FROM scored
     WINDOW w AS (PARTITION BY platform, external_id
                  ORDER BY completion_pct DESC, earned DESC, last_unlock_at DESC NULLS LAST, id)
 )
-SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, account_label, total, earned, avg_remaining_rarity, last_unlock_at, platinum_total, platinum_earned, gold_total, gold_earned, silver_total, silver_earned, bronze_total, bronze_earned, rare_earned, remaining, completion_pct, status_bucket, account_rank, account_count FROM ranked
+SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, account_label, total, earned, avg_remaining_rarity, last_unlock_at, platinum_total, platinum_earned, gold_total, gold_earned, silver_total, silver_earned, bronze_total, bronze_earned, legendary_earned, epic_earned, rare_earned, uncommon_earned, common_earned, remaining, completion_pct, status_bucket, account_rank, account_count FROM ranked
 WHERE account_rank = 1
   AND ($1::text IS NULL OR platform = $1::text)
   AND ($2::boolean IS NULL OR has_achievements = $2::boolean)
@@ -349,7 +354,11 @@ type ListGamesRow struct {
 	SilverEarned        int64
 	BronzeTotal         int64
 	BronzeEarned        int64
+	LegendaryEarned     int64
+	EpicEarned          int64
 	RareEarned          int64
+	UncommonEarned      int64
+	CommonEarned        int64
 	Remaining           int64
 	CompletionPct       float64
 	StatusBucket        string
@@ -420,7 +429,11 @@ func (q *Queries) ListGames(ctx context.Context, arg ListGamesParams) ([]ListGam
 			&i.SilverEarned,
 			&i.BronzeTotal,
 			&i.BronzeEarned,
+			&i.LegendaryEarned,
+			&i.EpicEarned,
 			&i.RareEarned,
+			&i.UncommonEarned,
+			&i.CommonEarned,
 			&i.Remaining,
 			&i.CompletionPct,
 			&i.StatusBucket,

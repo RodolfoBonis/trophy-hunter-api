@@ -123,14 +123,24 @@ func toGameAccountDTO(r dbgen.ListGameAccountsRow, hasPlatinum bool) gameAccount
 
 // gameListItemDTO ↔ components.schemas.GameListItem. Uma entrada por jogo (platform+external_id):
 // os campos de Game/progress são da conta MAIS AVANÇADA (id = game_id dela); accounts lista todas.
-// typeCountsDTO ↔ components.schemas.TypeCounts: troféus ganhos/total por tipo (PSN) e conquistas
-// raras ganhas (< 5% dos jogadores) — os contadores do card da biblioteca.
+// typeCountsDTO ↔ components.schemas.TypeCounts: troféus ganhos/total por tipo (PSN) e ganhos por
+// tier de raridade (cortes do style tile) — os contadores do card da biblioteca.
 type typeCountsDTO struct {
-	Platinum   typeCountDTO `json:"platinum"`
-	Gold       typeCountDTO `json:"gold"`
-	Silver     typeCountDTO `json:"silver"`
-	Bronze     typeCountDTO `json:"bronze"`
-	RareEarned int          `json:"rare_earned"`
+	Platinum typeCountDTO    `json:"platinum"`
+	Gold     typeCountDTO    `json:"gold"`
+	Silver   typeCountDTO    `json:"silver"`
+	Bronze   typeCountDTO    `json:"bronze"`
+	Rarity   rarityEarnedDTO `json:"rarity"`
+}
+
+// rarityEarnedDTO ↔ components.schemas.RarityEarned: troféus GANHOS por tier de raridade
+// (lendário < 1%, épico 1–5%, raro 5–20%, incomum 20–50%, comum ≥ 50%).
+type rarityEarnedDTO struct {
+	Legendary int `json:"legendary"`
+	Epic      int `json:"epic"`
+	Rare      int `json:"rare"`
+	Uncommon  int `json:"uncommon"`
+	Common    int `json:"common"`
 }
 
 type typeCountDTO struct {
@@ -170,11 +180,14 @@ func toListItemDTO(r dbgen.ListGamesRow) gameListItemDTO {
 	return gameListItemDTO{
 		gameDTO: g,
 		Counts: typeCountsDTO{
-			Platinum:   typeCountDTO{Earned: int(r.PlatinumEarned), Total: int(r.PlatinumTotal)},
-			Gold:       typeCountDTO{Earned: int(r.GoldEarned), Total: int(r.GoldTotal)},
-			Silver:     typeCountDTO{Earned: int(r.SilverEarned), Total: int(r.SilverTotal)},
-			Bronze:     typeCountDTO{Earned: int(r.BronzeEarned), Total: int(r.BronzeTotal)},
-			RareEarned: int(r.RareEarned),
+			Platinum: typeCountDTO{Earned: int(r.PlatinumEarned), Total: int(r.PlatinumTotal)},
+			Gold:     typeCountDTO{Earned: int(r.GoldEarned), Total: int(r.GoldTotal)},
+			Silver:   typeCountDTO{Earned: int(r.SilverEarned), Total: int(r.SilverTotal)},
+			Bronze:   typeCountDTO{Earned: int(r.BronzeEarned), Total: int(r.BronzeTotal)},
+			Rarity: rarityEarnedDTO{
+				Legendary: int(r.LegendaryEarned), Epic: int(r.EpicEarned), Rare: int(r.RareEarned),
+				Uncommon: int(r.UncommonEarned), Common: int(r.CommonEarned),
+			},
 		},
 		LastUnlockAt: tptr(r.LastUnlockAt),
 		Progress: progressSummaryDTO{
