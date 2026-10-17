@@ -37,19 +37,37 @@ curl -H 'X-Debug-User: me' localhost:8080/api/v1/me
 3. **Perfil público:** em *Privacidade do perfil*, deixe **Detalhes do jogo** e **Perfil** como
    *Público* — senão a integração fica em `error_private` e o sync não lê suas conquistas.
 
-Conecte:
+Conecte (várias contas por plataforma são suportadas — ex.: uma principal e uma alt):
 
 ```bash
-curl -X PUT localhost:8080/api/v1/integrations/steam \
+# 1ª conta Steam: api_key obrigatória
+curl -X POST localhost:8080/api/v1/integrations/steam \
   -H 'X-Debug-User: me' -H 'Content-Type: application/json' \
-  -d '{"api_key":"SUA_CHAVE","steam_id_or_vanity":"76561197960000000"}'
+  -d '{"label":"Principal","api_key":"SUA_CHAVE","steam_id_or_vanity":"76561197960000000"}'
+
+# contas seguintes: api_key opcional — a mesma key lê qualquer perfil PÚBLICO
+curl -X POST localhost:8080/api/v1/integrations/steam \
+  -H 'X-Debug-User: me' -H 'Content-Type: application/json' \
+  -d '{"label":"Alt","steam_id_or_vanity":"minha-alt"}'
 ```
+
+Renomear/trocar a key: `PATCH /api/v1/integrations/{id}`; remover (com os jogos dela):
+`DELETE /api/v1/integrations/{id}`.
+
+### Várias contas na biblioteca
+
+Conquistas são por conta, então o mesmo jogo em duas contas são duas linhas em `games`. A
+biblioteca (`GET /games`) devolve **um item por jogo** representado pela conta **mais avançada**
+(maior % → mais troféus → desbloqueio mais recente), com `accounts[]` listando todas as contas. As
+estatísticas somam as contas, mas cada jogo conta uma vez (o da conta mais avançada).
+`?integration_id=` restringe a uma conta.
 
 ## Como o sync funciona
 
 O sync usa **fan-out** para caber no orçamento de cada job (`JOB_TIMEOUT`) mesmo com rate limit baixo:
 
-- **Conexão** valida a chave/ID com a Steam, grava cifrado e enfileira um **full sync**.
+- **Conexão** valida a chave/ID com a Steam, grava cifrado e enfileira um **full sync** da conta
+  (cada conta tem seus próprios jobs, runs e `initial_sync_done`).
 - **`sync_platform`** lista a biblioteca (`GetOwnedGames`, 1 chamada), faz upsert da *identidade* de
   cada jogo e **emite um job `sync_game` por jogo** que precisa de trabalho. Cria o `sync_run` **pai**.
 - **`sync_game`** sincroniza schema/conquistas/raridade de **um** jogo. A *marca d'água* do
@@ -73,8 +91,8 @@ O sync usa **fan-out** para caber no orçamento de cada job (`JOB_TIMEOUT`) mesm
 ## Disparar sync manualmente
 
 ```bash
-# plataforma inteira (scope: full | incremental)
-curl -X POST localhost:8080/api/v1/integrations/steam/sync \
+# uma conta inteira (scope: full | incremental)
+curl -X POST localhost:8080/api/v1/integrations/<integration-id>/sync \
   -H 'X-Debug-User: me' -H 'Content-Type: application/json' -d '{"scope":"incremental"}'
 
 # um único jogo

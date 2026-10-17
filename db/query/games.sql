@@ -2,10 +2,7 @@
 SELECT * FROM games WHERE id = $1;
 
 -- name: GetGameByExternal :one
-SELECT * FROM games WHERE platform = $1 AND external_id = $2;
-
--- name: ListGamesByPlatform :many
-SELECT * FROM games WHERE platform = $1 ORDER BY id;
+SELECT * FROM games WHERE integration_id = $1 AND external_id = $2;
 
 -- name: UpsertGameIdentity :one
 -- Upserta a IDENTIDADE e os campos de EXIBIÇÃO do jogo (title, icon, cover, playtime, last_played),
@@ -20,12 +17,12 @@ SELECT * FROM games WHERE platform = $1 ORDER BY id;
 --     e é re-sincronizado no próximo incremental.
 -- Em INSERT (jogo novo), has_achievements vem do parâmetro (has_community_visible_stats).
 INSERT INTO games (
-    platform, external_id, np_service_name, title, normalized_title, icon, cover, platforms,
-    has_achievements, last_played_at, playtime_minutes, updated_at
+    integration_id, platform, external_id, np_service_name, title, normalized_title, icon, cover,
+    platforms, has_achievements, last_played_at, playtime_minutes, updated_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now()
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now()
 )
-ON CONFLICT (platform, external_id) DO UPDATE SET
+ON CONFLICT (integration_id, external_id) DO UPDATE SET
     np_service_name   = EXCLUDED.np_service_name,
     title             = EXCLUDED.title,
     normalized_title  = EXCLUDED.normalized_title,
@@ -48,15 +45,24 @@ UPDATE games SET schema_synced_at = now(), has_platinum = $2, updated_at = now()
 -- name: SetGamePercentagesSynced :exec
 UPDATE games SET percentages_synced_at = now(), updated_at = now() WHERE id = $1;
 
+-- A biblioteca agrupa o MESMO jogo (platform + external_id) de várias contas em UMA entrada,
+-- representada pela conta MAIS AVANÇADA ("best"): maior % concluído; empate → mais troféus
+-- ganhos; empate → desbloqueio mais recente. Filtros e ordenação valem sobre a linha best.
+-- account_count = em quantas contas o jogo existe (no escopo do filtro de conta, se houver).
+-- Esta é a mesma regra das estatísticas: somar contas, mas cada jogo conta uma vez (o best).
+
 -- name: ListGames :many
 WITH agg AS (
-    SELECT g.*,
+    SELECT g.*, i.label AS account_label,
         COUNT(t.id)                                                        AS total,
         COUNT(t.id) FILTER (WHERE t.earned)                                AS earned,
-        COALESCE(AVG(t.rarity_pct) FILTER (WHERE NOT t.earned), 0)::float8  AS avg_remaining_rarity
+        COALESCE(AVG(t.rarity_pct) FILTER (WHERE NOT t.earned), 0)::float8  AS avg_remaining_rarity,
+        MAX(t.earned_at)::timestamptz                                      AS last_unlock_at
     FROM games g
+    JOIN integrations i ON i.id = g.integration_id
     LEFT JOIN trophies t ON t.game_id = g.id
-    GROUP BY g.id
+    WHERE (sqlc.narg(integration_id)::uuid IS NULL OR g.integration_id = sqlc.narg(integration_id)::uuid)
+    GROUP BY g.id, i.label
 ),
 scored AS (
     SELECT *,
@@ -70,9 +76,18 @@ scored AS (
             ELSE 'not_started'
         END                                                                  AS status_bucket
     FROM agg
+),
+ranked AS (
+    SELECT *,
+        ROW_NUMBER() OVER w AS account_rank,
+        COUNT(*) OVER (PARTITION BY platform, external_id) AS account_count
+    FROM scored
+    WINDOW w AS (PARTITION BY platform, external_id
+                 ORDER BY completion_pct DESC, earned DESC, last_unlock_at DESC NULLS LAST, id)
 )
-SELECT * FROM scored
-WHERE (sqlc.narg(platform)::text IS NULL OR platform = sqlc.narg(platform)::text)
+SELECT * FROM ranked
+WHERE account_rank = 1
+  AND (sqlc.narg(platform)::text IS NULL OR platform = sqlc.narg(platform)::text)
   AND (sqlc.narg(has_achievements)::boolean IS NULL OR has_achievements = sqlc.narg(has_achievements)::boolean)
   AND (sqlc.narg(q)::text IS NULL OR normalized_title ILIKE '%' || sqlc.narg(q)::text || '%' ESCAPE '\')
   AND (sqlc.narg(status)::text IS NULL OR status_bucket = sqlc.narg(status)::text)
@@ -88,15 +103,18 @@ LIMIT sqlc.arg(lim) OFFSET sqlc.arg(off);
 
 -- name: CountGames :one
 WITH agg AS (
-    SELECT g.id, g.platform, g.has_achievements, g.normalized_title, g.abandoned,
+    SELECT g.id, g.platform, g.external_id, g.has_achievements, g.normalized_title, g.abandoned,
         COUNT(t.id)                         AS total,
-        COUNT(t.id) FILTER (WHERE t.earned) AS earned
+        COUNT(t.id) FILTER (WHERE t.earned) AS earned,
+        MAX(t.earned_at)::timestamptz       AS last_unlock_at
     FROM games g
     LEFT JOIN trophies t ON t.game_id = g.id
+    WHERE (sqlc.narg(integration_id)::uuid IS NULL OR g.integration_id = sqlc.narg(integration_id)::uuid)
     GROUP BY g.id
 ),
 scored AS (
     SELECT *,
+        (CASE WHEN total > 0 THEN earned::float8 / total ELSE 0 END)::float8 AS completion_pct,
         CASE
             WHEN abandoned                                      THEN 'abandoned'
             WHEN total > 0 AND earned = total                   THEN 'completed'
@@ -105,9 +123,46 @@ scored AS (
             ELSE 'not_started'
         END AS status_bucket
     FROM agg
+),
+ranked AS (
+    SELECT *,
+        ROW_NUMBER() OVER (PARTITION BY platform, external_id
+                           ORDER BY completion_pct DESC, earned DESC, last_unlock_at DESC NULLS LAST, id) AS account_rank
+    FROM scored
 )
-SELECT COUNT(*) FROM scored
-WHERE (sqlc.narg(platform)::text IS NULL OR platform = sqlc.narg(platform)::text)
+SELECT COUNT(*) FROM ranked
+WHERE account_rank = 1
+  AND (sqlc.narg(platform)::text IS NULL OR platform = sqlc.narg(platform)::text)
   AND (sqlc.narg(has_achievements)::boolean IS NULL OR has_achievements = sqlc.narg(has_achievements)::boolean)
   AND (sqlc.narg(q)::text IS NULL OR normalized_title ILIKE '%' || sqlc.narg(q)::text || '%' ESCAPE '\')
   AND (sqlc.narg(status)::text IS NULL OR status_bucket = sqlc.narg(status)::text);
+
+-- name: ListGameAccounts :many
+-- Todas as contas que possuem os jogos dados (chaves "platform:external_id"), com o progresso de
+-- cada uma, já na ordem "mais avançada primeiro" (mesmo critério do best da biblioteca).
+WITH agg AS (
+    SELECT g.id, g.integration_id, g.platform, g.external_id, g.abandoned, i.label AS account_label,
+        i.display_name AS account_display_name,
+        COUNT(t.id)                         AS total,
+        COUNT(t.id) FILTER (WHERE t.earned) AS earned,
+        MAX(t.earned_at)::timestamptz       AS last_unlock_at,
+        COALESCE(bool_or(t.type = 'platinum' AND t.earned), false)::boolean AS has_platinum_earned
+    FROM games g
+    JOIN integrations i ON i.id = g.integration_id
+    LEFT JOIN trophies t ON t.game_id = g.id
+    WHERE (g.platform || ':' || g.external_id) = ANY(sqlc.arg(keys)::text[])
+    GROUP BY g.id, i.label, i.display_name
+)
+SELECT *,
+    (CASE WHEN total > 0 THEN earned::float8 / total ELSE 0 END)::float8 AS completion_pct,
+    CASE
+        WHEN abandoned                                      THEN 'abandoned'
+        WHEN total > 0 AND earned = total                   THEN 'completed'
+        WHEN total > 0 AND earned::float8 / total >= sqlc.arg(almost)::float8 THEN 'almost'
+        WHEN earned > 0                                     THEN 'in_progress'
+        ELSE 'not_started'
+    END AS status_bucket
+FROM agg
+ORDER BY platform, external_id,
+    (CASE WHEN total > 0 THEN earned::float8 / total ELSE 0 END) DESC, earned DESC,
+    last_unlock_at DESC NULLS LAST, id;

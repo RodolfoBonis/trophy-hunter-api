@@ -73,15 +73,16 @@ func (s *Scheduler) tick(ctx context.Context) {
 		if i.Status == "disabled" {
 			continue
 		}
-		_, enq, err := s.syncer.EnqueuePlatformSync(ctx, i.Platform, ScopeIncremental, TriggerSchedule)
+		_, enq, err := s.syncer.EnqueuePlatformSync(ctx, i.ID, ScopeIncremental, TriggerSchedule)
 		switch {
 		case errors.Is(err, ErrNotConnected):
-			// integração sem credenciais ainda; ignora.
+			// conta removida entre a listagem e o enfileiramento; ignora.
 		case err != nil:
 			s.logger.Error("scheduler: enfileirar sync falhou",
-				slog.String("platform", i.Platform), slog.String("err", err.Error()))
+				slog.String("platform", i.Platform), slog.String("account", i.Label), slog.String("err", err.Error()))
 		case enq:
-			s.logger.Info("sync incremental agendado", slog.String("platform", i.Platform))
+			s.logger.Info("sync incremental agendado",
+				slog.String("platform", i.Platform), slog.String("account", i.Label))
 		}
 	}
 }

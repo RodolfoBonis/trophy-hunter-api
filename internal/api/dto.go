@@ -16,7 +16,9 @@ type userDTO struct {
 
 // integrationDTO ↔ components.schemas.Integration. NUNCA inclui credenciais.
 type integrationDTO struct {
+	ID           string     `json:"id"`
 	Platform     string     `json:"platform"`
+	Label        string     `json:"label"`
 	Status       string     `json:"status"`
 	AccountID    string     `json:"account_id"`
 	DisplayName  string     `json:"display_name"`
@@ -27,7 +29,9 @@ type integrationDTO struct {
 
 func toIntegrationDTO(i dbgen.Integration) integrationDTO {
 	return integrationDTO{
+		ID:           uuidStr(i.ID),
 		Platform:     i.Platform,
+		Label:        i.Label,
 		Status:       i.Status,
 		AccountID:    i.AccountID,
 		DisplayName:  i.DisplayName,
@@ -88,10 +92,39 @@ type progressSummaryDTO struct {
 	HasPlatinum   bool    `json:"has_platinum"`
 }
 
-// gameListItemDTO ↔ components.schemas.GameListItem (Game + progress).
+// gameAccountDTO ↔ components.schemas.GameAccount: uma conta que possui o jogo, com o progresso
+// dela. Na lista e no detalhe vêm ordenadas da mais avançada para a menos avançada.
+type gameAccountDTO struct {
+	IntegrationID string             `json:"integration_id"`
+	Label         string             `json:"label"`
+	DisplayName   string             `json:"display_name"`
+	GameID        string             `json:"game_id"`
+	Progress      progressSummaryDTO `json:"progress"`
+}
+
+func toGameAccountDTO(r dbgen.ListGameAccountsRow, hasPlatinum bool) gameAccountDTO {
+	return gameAccountDTO{
+		IntegrationID: uuidStr(r.IntegrationID),
+		Label:         r.AccountLabel,
+		DisplayName:   r.AccountDisplayName,
+		GameID:        uuidStr(r.ID),
+		Progress: progressSummaryDTO{
+			Total:         int(r.Total),
+			Earned:        int(r.Earned),
+			Remaining:     int(r.Total - r.Earned),
+			CompletionPct: r.CompletionPct,
+			Status:        r.StatusBucket,
+			HasPlatinum:   hasPlatinum,
+		},
+	}
+}
+
+// gameListItemDTO ↔ components.schemas.GameListItem. Uma entrada por jogo (platform+external_id):
+// os campos de Game/progress são da conta MAIS AVANÇADA (id = game_id dela); accounts lista todas.
 type gameListItemDTO struct {
 	gameDTO
 	Progress progressSummaryDTO `json:"progress"`
+	Accounts []gameAccountDTO   `json:"accounts"`
 }
 
 func toListItemDTO(r dbgen.ListGamesRow) gameListItemDTO {
@@ -187,11 +220,15 @@ type trophyGroupDTO struct {
 	Trophies   []trophyDTO `json:"trophies"`
 }
 
-// gameDetailDTO ↔ components.schemas.GameDetail
+// gameDetailDTO ↔ components.schemas.GameDetail. integration_id/account_label identificam a conta
+// desta linha; accounts traz todas as contas que possuem o jogo (mais avançada primeiro).
 type gameDetailDTO struct {
 	gameDTO
-	Progress progress.Summary `json:"progress"`
-	Groups   []trophyGroupDTO `json:"groups"`
+	IntegrationID string           `json:"integration_id"`
+	AccountLabel  string           `json:"account_label"`
+	Progress      progress.Summary `json:"progress"`
+	Groups        []trophyGroupDTO `json:"groups"`
+	Accounts      []gameAccountDTO `json:"accounts"`
 }
 
 // syncRunDTO ↔ components.schemas.SyncRun
@@ -199,34 +236,41 @@ type gameDetailDTO struct {
 // games_total/games_done/games_failed refletem o fan-out: total de jogos a sincronizar no run,
 // quantos terminaram e quantos falharam. (games_touched foi substituído por esses campos.)
 type syncRunDTO struct {
-	ID           string     `json:"id"`
-	Platform     string     `json:"platform"`
-	Scope        string     `json:"scope"`
-	Trigger      string     `json:"trigger"`
-	Status       string     `json:"status"`
-	StartedAt    time.Time  `json:"started_at"`
-	FinishedAt   *time.Time `json:"finished_at"`
-	ItemsChanged int        `json:"items_changed"`
-	GamesTotal   int        `json:"games_total"`
-	GamesDone    int        `json:"games_done"`
-	GamesFailed  int        `json:"games_failed"`
-	Error        string     `json:"error"`
+	ID            string     `json:"id"`
+	IntegrationID *string    `json:"integration_id"`
+	Platform      string     `json:"platform"`
+	Scope         string     `json:"scope"`
+	Trigger       string     `json:"trigger"`
+	Status        string     `json:"status"`
+	StartedAt     time.Time  `json:"started_at"`
+	FinishedAt    *time.Time `json:"finished_at"`
+	ItemsChanged  int        `json:"items_changed"`
+	GamesTotal    int        `json:"games_total"`
+	GamesDone     int        `json:"games_done"`
+	GamesFailed   int        `json:"games_failed"`
+	Error         string     `json:"error"`
 }
 
 func toSyncRunDTO(r dbgen.SyncRun) syncRunDTO {
+	var integrationID *string
+	if r.IntegrationID.Valid {
+		v := uuidStr(r.IntegrationID)
+		integrationID = &v
+	}
 	return syncRunDTO{
-		ID:           uuidStr(r.ID),
-		Platform:     r.Platform,
-		Scope:        r.Scope,
-		Trigger:      r.Trigger,
-		Status:       r.Status,
-		StartedAt:    r.StartedAt.Time,
-		FinishedAt:   tptr(r.FinishedAt),
-		ItemsChanged: int(r.ItemsChanged),
-		GamesTotal:   int(r.GamesTotal),
-		GamesDone:    int(r.GamesDone),
-		GamesFailed:  int(r.GamesFailed),
-		Error:        r.Error,
+		ID:            uuidStr(r.ID),
+		IntegrationID: integrationID,
+		Platform:      r.Platform,
+		Scope:         r.Scope,
+		Trigger:       r.Trigger,
+		Status:        r.Status,
+		StartedAt:     r.StartedAt.Time,
+		FinishedAt:    tptr(r.FinishedAt),
+		ItemsChanged:  int(r.ItemsChanged),
+		GamesTotal:    int(r.GamesTotal),
+		GamesDone:     int(r.GamesDone),
+		GamesFailed:   int(r.GamesFailed),
+		Error:         r.Error,
 	}
 }
 

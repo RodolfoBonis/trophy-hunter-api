@@ -143,14 +143,14 @@ func TestFullSyncThenIncrementalDiff(t *testing.T) {
 	fake := newFake()
 	syncer := newSyncer(t, pool, q, jobs, fake)
 
-	integ, err := syncer.ConnectSteam(ctx, "FAKEKEY", "76561197960000000")
+	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "FAKEKEY", IDOrVanity: "76561197960000000"})
 	require.NoError(t, err)
 	require.Equal(t, "connected", integ.Status)
 	require.Equal(t, "TH", integ.DisplayName)
 
 	processAll(t, jobs, syncer)
 
-	game, err := q.GetGameByExternal(ctx, dbgen.GetGameByExternalParams{Platform: "steam", ExternalID: "620"})
+	game, err := q.GetGameByExternal(ctx, dbgen.GetGameByExternalParams{IntegrationID: integ.ID, ExternalID: "620"})
 	require.NoError(t, err)
 	require.True(t, game.HasAchievements)
 	require.Equal(t, "portal 2", game.NormalizedTitle) // ™ removido
@@ -183,7 +183,7 @@ func TestFullSyncThenIncrementalDiff(t *testing.T) {
 	require.Equal(t, int32(1), run.GamesDone)
 	require.Equal(t, int32(0), run.GamesFailed)
 
-	integAfter, err := q.GetIntegration(ctx, "steam")
+	integAfter, err := q.GetIntegration(ctx, integ.ID)
 	require.NoError(t, err)
 	require.True(t, integAfter.InitialSyncDone)
 	require.True(t, integAfter.LastSyncedAt.Valid)
@@ -196,7 +196,7 @@ func TestFullSyncThenIncrementalDiff(t *testing.T) {
 		{APIName: "ACH_SECRET", Achieved: true, UnlockTime: 1700010000},
 	}
 
-	_, enq, err := syncer.EnqueuePlatformSync(ctx, "steam", syncpkg.ScopeIncremental, syncpkg.TriggerManual)
+	_, enq, err := syncer.EnqueuePlatformSync(ctx, integ.ID, syncpkg.ScopeIncremental, syncpkg.TriggerManual)
 	require.NoError(t, err)
 	require.True(t, enq)
 	processAll(t, jobs, syncer)
@@ -235,7 +235,7 @@ func TestFanOutCountsFailedChild(t *testing.T) {
 
 	syncer := newSyncer(t, pool, q, jobs, fake)
 
-	_, err := syncer.ConnectSteam(ctx, "FAKEKEY", "76561197960000000")
+	integ0, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "FAKEKEY", IDOrVanity: "76561197960000000"})
 	require.NoError(t, err)
 	processAll(t, jobs, syncer)
 
@@ -247,17 +247,17 @@ func TestFanOutCountsFailedChild(t *testing.T) {
 	require.Equal(t, "error", run.Status)
 
 	// Jogo que falhou não ganhou marca d'água (será re-tentado no próximo incremental).
-	failed, err := q.GetGameByExternal(ctx, dbgen.GetGameByExternalParams{Platform: "steam", ExternalID: "630"})
+	failed, err := q.GetGameByExternal(ctx, dbgen.GetGameByExternalParams{IntegrationID: integ0.ID, ExternalID: "630"})
 	require.NoError(t, err)
 	require.False(t, failed.RemoteUpdatedAt.Valid, "jogo falho não grava marca d'água")
 
 	// Jogo que teve sucesso ganhou a marca d'água.
-	ok, err := q.GetGameByExternal(ctx, dbgen.GetGameByExternalParams{Platform: "steam", ExternalID: "620"})
+	ok, err := q.GetGameByExternal(ctx, dbgen.GetGameByExternalParams{IntegrationID: integ0.ID, ExternalID: "620"})
 	require.NoError(t, err)
 	require.True(t, ok.RemoteUpdatedAt.Valid)
 
 	// Erro permanente (chave inválida) → integração em 'error'; initial_sync_done NÃO ligado.
-	integ, err := q.GetIntegration(ctx, "steam")
+	integ, err := q.GetIntegration(ctx, integ0.ID)
 	require.NoError(t, err)
 	require.Equal(t, "error", integ.Status)
 	require.False(t, integ.InitialSyncDone, "full com falhas não marca initial_sync_done")
@@ -276,12 +276,12 @@ func TestPrivateEmptyLibrary(t *testing.T) {
 	fake.summary.CommunityVisibleState = 1 // privado
 	syncer := newSyncer(t, pool, q, jobs, fake)
 
-	integ, err := syncer.ConnectSteam(ctx, "FAKEKEY", "76561197960000000")
+	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "FAKEKEY", IDOrVanity: "76561197960000000"})
 	require.NoError(t, err)
 	require.Equal(t, "error_private", integ.Status) // já no connect
 	processAll(t, jobs, syncer)
 
-	after, err := q.GetIntegration(ctx, "steam")
+	after, err := q.GetIntegration(ctx, integ.ID)
 	require.NoError(t, err)
 	require.Equal(t, "error_private", after.Status, "não pode virar connected com perfil privado")
 	require.False(t, after.InitialSyncDone, "não marca initial_sync_done com biblioteca vazia privada")
@@ -297,8 +297,12 @@ func TestUnlockEventUniqueness(t *testing.T) {
 	ctx := context.Background()
 	q := dbgen.New(pool)
 
+	integ, err := q.CreateIntegration(ctx, dbgen.CreateIntegrationParams{
+		Platform: "steam", Label: "Principal", AccountID: "76561197960000001",
+	})
+	require.NoError(t, err)
 	game, err := q.UpsertGameIdentity(ctx, dbgen.UpsertGameIdentityParams{
-		Platform: "steam", ExternalID: "999", Title: "T", NormalizedTitle: "t",
+		IntegrationID: integ.ID, Platform: "steam", ExternalID: "999", Title: "T", NormalizedTitle: "t",
 		Platforms: []string{}, HasAchievements: true,
 	})
 	require.NoError(t, err)
@@ -326,7 +330,7 @@ func TestConnectPrivateProfileMarksErrorPrivate(t *testing.T) {
 
 	syncer := newSyncer(t, pool, q, jobs, fake)
 
-	integ, err := syncer.ConnectSteam(ctx, "FAKEKEY", "76561197960000000")
+	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "FAKEKEY", IDOrVanity: "76561197960000000"})
 	require.NoError(t, err)
 	require.Equal(t, "error_private", integ.Status)
 }

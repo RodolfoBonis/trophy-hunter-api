@@ -1,39 +1,41 @@
+-- Integrações: várias contas por plataforma (ver migration 00013). Tudo é endereçado pelo id.
+
 -- name: GetIntegration :one
-SELECT * FROM integrations WHERE platform = $1;
+SELECT * FROM integrations WHERE id = $1;
+
+-- name: GetIntegrationByAccount :one
+SELECT * FROM integrations WHERE platform = $1 AND account_id = $2;
 
 -- name: ListIntegrations :many
-SELECT * FROM integrations ORDER BY platform;
+SELECT * FROM integrations ORDER BY platform, created_at;
 
--- name: UpsertIntegrationCredentials :one
--- Cria/atualiza a conexão com uma plataforma gravando as credenciais cifradas e a identidade da
--- conta. Reseta initial_sync_done=false para que o próximo full sync (re)conecte sem gerar eventos.
+-- name: ListIntegrationsByPlatform :many
+SELECT * FROM integrations WHERE platform = $1 ORDER BY created_at;
+
+-- name: CreateIntegration :one
+-- Cria a conexão com uma conta gravando as credenciais cifradas e a identidade da conta.
+-- initial_sync_done=false: o primeiro full sync não gera unlock_events.
 INSERT INTO integrations (
-    platform, status, account_id, display_name, avatar, credentials_enc, key_version,
+    platform, label, status, account_id, display_name, avatar, credentials_enc, key_version,
     last_error, initial_sync_done, updated_at
 ) VALUES (
-    $1, 'connected', $2, $3, $4, $5, $6, '', false, now()
+    $1, $2, 'connected', $3, $4, $5, $6, $7, '', false, now()
 )
-ON CONFLICT (platform) DO UPDATE SET
-    status            = 'connected',
-    account_id        = EXCLUDED.account_id,
-    display_name      = EXCLUDED.display_name,
-    avatar            = EXCLUDED.avatar,
-    credentials_enc   = EXCLUDED.credentials_enc,
-    key_version       = EXCLUDED.key_version,
-    last_error        = '',
-    initial_sync_done = false,
-    updated_at        = now()
 RETURNING *;
+
+-- name: UpdateIntegrationCredentials :exec
+-- Troca as credenciais cifradas (ex.: nova API key) sem mexer na identidade nem no histórico.
+UPDATE integrations
+SET credentials_enc = $2, key_version = $3, updated_at = now()
+WHERE id = $1;
+
+-- name: UpdateIntegrationLabel :exec
+UPDATE integrations SET label = $2, updated_at = now() WHERE id = $1;
 
 -- name: UpdateIntegrationStatus :exec
 UPDATE integrations
 SET status = $2, last_error = $3, updated_at = now()
-WHERE platform = $1;
-
--- name: UpdateIntegrationAccount :exec
-UPDATE integrations
-SET display_name = $2, avatar = $3, account_id = $4, updated_at = now()
-WHERE platform = $1;
+WHERE id = $1;
 
 -- name: MarkIntegrationSynced :exec
 -- Fecho de sync BEM-SUCEDIDO: marca last_synced_at, volta a status connected e limpa o erro.
@@ -42,14 +44,15 @@ UPDATE integrations
 SET last_synced_at = now(), status = 'connected', last_error = '',
     initial_sync_done = initial_sync_done OR sqlc.arg(mark_initial)::boolean,
     updated_at = now()
-WHERE platform = $1;
+WHERE id = $1;
 
 -- name: TouchIntegrationSynced :exec
 -- Fecho de sync COM falhas: só atualiza last_synced_at (preserva o status de erro que os jobs
 -- filhos mortos já definiram). Não volta a connected.
 UPDATE integrations
 SET last_synced_at = now(), updated_at = now()
-WHERE platform = $1;
+WHERE id = $1;
 
 -- name: DeleteIntegration :exec
-DELETE FROM integrations WHERE platform = $1;
+-- Remove a conta; os jogos dela (e troféus/grupos/eventos) caem em cascata.
+DELETE FROM integrations WHERE id = $1;

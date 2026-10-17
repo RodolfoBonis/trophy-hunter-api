@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/httperr"
@@ -69,6 +71,17 @@ func (h *Handlers) listGames(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// integration_id: restringe a biblioteca a UMA conta (default: todas, agrupadas por jogo).
+	var integrationID pgtype.UUID
+	if v := qp.Get("integration_id"); v != "" {
+		id, err := parseUUIDParam(v)
+		if err != nil {
+			httperr.Write(w, r, httperr.New(httperr.KindBadRequest, "Bad request", "integration_id inválido"))
+			return
+		}
+		integrationID = id
+	}
+
 	sort := qp.Get("sort")
 	if sort == "" {
 		sort = "last_played"
@@ -86,7 +99,7 @@ func (h *Handlers) listGames(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	rows, err := h.q.ListGames(ctx, dbgen.ListGamesParams{
-		Platform: platform, HasAchievements: hasAch, Q: search, Status: status,
+		Platform: platform, HasAchievements: hasAch, Q: search, Status: status, IntegrationID: integrationID,
 		Sort: sort, Lim: int32(limit), Off: int32(offset), Almost: h.almostThreshold, //nolint:gosec // valores clampados
 	})
 	if err != nil {
@@ -94,8 +107,21 @@ func (h *Handlers) listGames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	total, err := h.q.CountGames(ctx, dbgen.CountGamesParams{
-		Platform: platform, HasAchievements: hasAch, Q: search, Status: status, Almost: h.almostThreshold,
+		Platform: platform, HasAchievements: hasAch, Q: search, Status: status, IntegrationID: integrationID,
+		Almost: h.almostThreshold,
 	})
+	if err != nil {
+		httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
+		return
+	}
+
+	// Contas de cada jogo da página (uma query para a página toda). Com filtro de conta, o card só
+	// mostra aquela conta; sem filtro, todas as contas que possuem o jogo.
+	keys := make([]string, 0, len(rows))
+	for _, row := range rows {
+		keys = append(keys, gameKey(row.Platform, row.ExternalID))
+	}
+	accounts, err := h.gameAccounts(ctx, keys)
 	if err != nil {
 		httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
 		return
@@ -103,7 +129,9 @@ func (h *Handlers) listGames(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]gameListItemDTO, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, toListItemDTO(row))
+		item := toListItemDTO(row)
+		item.Accounts = accountsFor(accounts[gameKey(row.Platform, row.ExternalID)], row.HasPlatinum, integrationID)
+		items = append(items, item)
 	}
 	writeJSON(w, http.StatusOK, gameListPageDTO{Items: items, Total: int(total), Limit: limit, Offset: offset})
 }
@@ -166,10 +194,24 @@ func (h *Handlers) getGame(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	integ, err := h.q.GetIntegration(ctx, game.IntegrationID)
+	if err != nil {
+		httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
+		return
+	}
+	accounts, err := h.gameAccounts(ctx, []string{gameKey(game.Platform, game.ExternalID)})
+	if err != nil {
+		httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
+		return
+	}
+
 	writeJSON(w, http.StatusOK, gameDetailDTO{
-		gameDTO:  toGameDTO(game),
-		Progress: summary,
-		Groups:   groupDTOs,
+		gameDTO:       toGameDTO(game),
+		IntegrationID: uuidStr(integ.ID),
+		AccountLabel:  integ.Label,
+		Progress:      summary,
+		Groups:        groupDTOs,
+		Accounts:      accountsFor(accounts[gameKey(game.Platform, game.ExternalID)], game.HasPlatinum, pgtype.UUID{}),
 	})
 }
 
@@ -182,4 +224,37 @@ func atoiDefault(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+// gameKey identifica o MESMO jogo entre contas (platform + id externo).
+func gameKey(platform, externalID string) string { return platform + ":" + externalID }
+
+// gameAccounts carrega, numa query, as contas que possuem cada jogo (chave → contas, mais avançada
+// primeiro).
+func (h *Handlers) gameAccounts(ctx context.Context, keys []string) (map[string][]dbgen.ListGameAccountsRow, error) {
+	out := make(map[string][]dbgen.ListGameAccountsRow, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+	rows, err := h.q.ListGameAccounts(ctx, dbgen.ListGameAccountsParams{Keys: keys, Almost: h.almostThreshold})
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		k := gameKey(r.Platform, r.ExternalID)
+		out[k] = append(out[k], r)
+	}
+	return out, nil
+}
+
+// accountsFor converte as contas de um jogo em DTO; com only válido, mantém só aquela conta.
+func accountsFor(rows []dbgen.ListGameAccountsRow, hasPlatinum bool, only pgtype.UUID) []gameAccountDTO {
+	out := make([]gameAccountDTO, 0, len(rows))
+	for _, r := range rows {
+		if only.Valid && r.IntegrationID != only {
+			continue
+		}
+		out = append(out, toGameAccountDTO(r, hasPlatinum))
+	}
+	return out
 }

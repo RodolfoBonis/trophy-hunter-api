@@ -20,6 +20,21 @@ import (
 // O container e o pool são encerrados automaticamente via t.Cleanup. Pula o teste em -short.
 func NewPostgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
+	dsn := NewPostgresDSN(t)
+	if err := db.Migrate(context.Background(), dsn, migrations.FS); err != nil {
+		t.Fatalf("migrar: %v", err)
+	}
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// NewPostgresDSN sobe um Postgres efêmero SEM migrations e devolve a DSN (testes de migration).
+func NewPostgresDSN(t *testing.T) string {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("pula teste de integração (-short)")
 	}
@@ -43,15 +58,5 @@ func NewPostgres(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatalf("connection string: %v", err)
 	}
-
-	if err := db.Migrate(ctx, dsn, migrations.FS); err != nil {
-		t.Fatalf("migrar: %v", err)
-	}
-
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
+	return dsn
 }

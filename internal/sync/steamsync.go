@@ -39,7 +39,12 @@ func (s *Syncer) handlePlatform(ctx context.Context, p PlatformPayload) error {
 		return nil
 	}
 
-	integ, client, creds, err := s.loadSteam(ctx)
+	integID, err := s.platformIntegrationID(ctx, p)
+	if err != nil {
+		s.failRun(ctx, runID, "integração não conectada")
+		return nil //nolint:nilerr // conta removida: nada a fazer, o run fecha como erro
+	}
+	integ, client, creds, err := s.loadSteam(ctx, integID)
 	if errors.Is(err, ErrNotConnected) {
 		s.logger.Info("sync steam ignorado: integração não conectada")
 		s.failRun(ctx, runID, "integração não conectada")
@@ -52,7 +57,7 @@ func (s *Syncer) handlePlatform(ctx context.Context, p PlatformPayload) error {
 
 	owned, err := client.GetOwnedGames(ctx, creds.SteamID)
 	if err != nil {
-		s.failPlatform(ctx, runID, err)
+		s.failPlatform(ctx, runID, integID, err)
 		return queue.Permanent(err) // o cliente já retentou 429/5xx; não rodar retry de job em cima
 	}
 
@@ -61,11 +66,11 @@ func (s *Syncer) handlePlatform(ctx context.Context, p PlatformPayload) error {
 		// de concluir, para não marcar initial_sync_done nem voltar a status connected (finding 6).
 		summary, serr := client.GetPlayerSummary(ctx, creds.SteamID)
 		if serr != nil {
-			s.failPlatform(ctx, runID, serr)
+			s.failPlatform(ctx, runID, integID, serr)
 			return queue.Permanent(serr)
 		}
 		if !summary.IsPublic() {
-			s.setPermanentStatus(ctx, "steam", steam.ErrProfilePrivate)
+			s.setPermanentStatus(ctx, integID, steam.ErrProfilePrivate)
 			s.failRun(ctx, runID, "perfil Steam não é público")
 			return queue.Permanent(steam.ErrProfilePrivate)
 		}
@@ -77,17 +82,17 @@ func (s *Syncer) handlePlatform(ctx context.Context, p PlatformPayload) error {
 	total := 0
 	for _, og := range owned {
 		prior, priorErr := s.q.GetGameByExternal(ctx, dbgen.GetGameByExternalParams{
-			Platform: "steam", ExternalID: strconv.Itoa(og.AppID),
+			IntegrationID: integID, ExternalID: strconv.Itoa(og.AppID),
 		})
 		isNew := errors.Is(priorErr, pgx.ErrNoRows)
 		if priorErr != nil && !isNew {
-			s.failPlatform(ctx, runID, priorErr)
+			s.failPlatform(ctx, runID, integID, priorErr)
 			return queue.Permanent(fmt.Errorf("carregar jogo: %w", priorErr))
 		}
 
-		gameRow, uerr := s.upsertGameIdentity(ctx, og)
+		gameRow, uerr := s.upsertGameIdentity(ctx, integID, og)
 		if uerr != nil {
-			s.failPlatform(ctx, runID, uerr)
+			s.failPlatform(ctx, runID, integID, uerr)
 			return queue.Permanent(fmt.Errorf("upsert jogo: %w", uerr))
 		}
 
@@ -117,7 +122,7 @@ func (s *Syncer) handlePlatform(ctx context.Context, p PlatformPayload) error {
 			DedupeKey: fmt.Sprintf("%s:%s", KindSyncGame, uuidStr(gameRow.ID)),
 		})
 		if eerr != nil {
-			s.failPlatform(ctx, runID, eerr)
+			s.failPlatform(ctx, runID, integID, eerr)
 			return queue.Permanent(fmt.Errorf("enfileirar sync_game: %w", eerr))
 		}
 		if enq {
@@ -136,28 +141,28 @@ func (s *Syncer) handleGame(ctx context.Context, job queue.Job, p GamePayload) e
 		return fmt.Errorf("sync_run_id inválido: %w", err)
 	}
 
-	integ, client, creds, err := s.loadSteam(ctx)
-	if errors.Is(err, ErrNotConnected) {
-		s.finalizeChild(ctx, runID, true, 0, "steam")
-		return nil
-	}
-	if err != nil {
-		return s.gameTransient(ctx, job, runID, "steam", err)
-	}
-	_ = integ
-
 	gameUUID, err := parseUUID(p.GameID)
 	if err != nil {
-		s.finalizeChild(ctx, runID, true, 0, "steam")
-		return nil
+		s.finalizeChild(ctx, runID, true, 0)
+		return nil //nolint:nilerr // payload inválido: contabiliza como falha e descarta
 	}
 	game, err := s.q.GetGameByID(ctx, gameUUID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			s.finalizeChild(ctx, runID, true, 0, "steam")
+			s.finalizeChild(ctx, runID, true, 0) // jogo/conta removidos no meio do sync
 			return nil
 		}
-		return s.gameTransient(ctx, job, runID, "steam", fmt.Errorf("carregar jogo: %w", err))
+		return s.gameTransient(ctx, job, runID, pgtype.UUID{}, fmt.Errorf("carregar jogo: %w", err))
+	}
+	integID := game.IntegrationID
+
+	_, client, creds, err := s.loadSteam(ctx, integID)
+	if errors.Is(err, ErrNotConnected) {
+		s.finalizeChild(ctx, runID, true, 0)
+		return nil
+	}
+	if err != nil {
+		return s.gameTransient(ctx, job, runID, integID, err)
 	}
 
 	appID := p.AppID
@@ -171,7 +176,7 @@ func (s *Syncer) handleGame(ctx context.Context, job queue.Job, p GamePayload) e
 		// Sync manual: busca o owned-games para obter o estado remoto (marca d'água) e has_stats.
 		owned, oerr := client.GetOwnedGames(ctx, creds.SteamID)
 		if oerr != nil {
-			return s.gameTransient(ctx, job, runID, "steam", oerr)
+			return s.gameTransient(ctx, job, runID, integID, oerr)
 		}
 		found := false
 		for _, og := range owned {
@@ -181,7 +186,7 @@ func (s *Syncer) handleGame(ctx context.Context, job queue.Job, p GamePayload) e
 			}
 		}
 		if !found {
-			s.finalizeChild(ctx, runID, false, 0, "steam") // não está mais na biblioteca
+			s.finalizeChild(ctx, runID, false, 0) // não está mais na biblioteca
 			return nil
 		}
 	}
@@ -191,7 +196,7 @@ func (s *Syncer) handleGame(ctx context.Context, job queue.Job, p GamePayload) e
 			s.logger.Warn("falha ao marcar sem conquistas", slog.String("err", herr.Error()))
 		}
 		s.setWatermark(ctx, game.ID, rtime)
-		s.finalizeChild(ctx, runID, false, 0, "steam")
+		s.finalizeChild(ctx, runID, false, 0)
 		return nil
 	}
 
@@ -200,30 +205,32 @@ func (s *Syncer) handleGame(ctx context.Context, job queue.Job, p GamePayload) e
 	switch {
 	case gerr == nil:
 		s.setWatermark(ctx, game.ID, rtime) // marca d'água SÓ após sucesso (finding 5)
-		s.finalizeChild(ctx, runID, false, changed, "steam")
+		s.finalizeChild(ctx, runID, false, changed)
 		return nil
 	case errors.Is(gerr, steam.ErrNoStats):
 		if herr := s.q.SetGameHasAchievements(ctx, dbgen.SetGameHasAchievementsParams{ID: game.ID, HasAchievements: false}); herr != nil {
 			s.logger.Warn("falha ao marcar sem conquistas", slog.String("err", herr.Error()))
 		}
 		s.setWatermark(ctx, game.ID, rtime)
-		s.finalizeChild(ctx, runID, false, changed, "steam")
+		s.finalizeChild(ctx, runID, false, changed)
 		return nil
 	case errors.Is(gerr, steam.ErrProfilePrivate), errors.Is(gerr, steam.ErrInvalidKey):
-		s.setPermanentStatus(ctx, "steam", gerr) // permanente: status já, job morre imediatamente
-		s.finalizeChild(ctx, runID, true, changed, "steam")
+		s.setPermanentStatus(ctx, integID, gerr) // permanente: status já, job morre imediatamente
+		s.finalizeChild(ctx, runID, true, changed)
 		return queue.Permanent(gerr)
 	default:
-		return s.gameTransient(ctx, job, runID, "steam", gerr)
+		return s.gameTransient(ctx, job, runID, integID, gerr)
 	}
 }
 
 // gameTransient trata um erro transitório por jogo: re-tenta enquanto houver tentativas; na última
 // (job já virará dead) contabiliza a falha e só então marca a integração em erro (finding 9).
-func (s *Syncer) gameTransient(ctx context.Context, job queue.Job, runID pgtype.UUID, platform string, cause error) error {
+func (s *Syncer) gameTransient(ctx context.Context, job queue.Job, runID, integID pgtype.UUID, cause error) error {
 	if job.Attempts >= job.MaxAttempts {
-		s.finalizeChild(ctx, runID, true, 0, platform)
-		s.setTransientErrorStatus(ctx, platform, cause)
+		s.finalizeChild(ctx, runID, true, 0)
+		if integID.Valid {
+			s.setTransientErrorStatus(ctx, integID, cause)
+		}
 		return cause
 	}
 	s.logger.Warn("falha transitória ao sincronizar jogo; vai re-tentar",
@@ -353,12 +360,13 @@ func (s *Syncer) applyEarned(ctx context.Context, trophyID pgtype.UUID, achieved
 
 // upsertGameIdentity insere/atualiza identidade + exibição de um jogo Steam (sem tocar na marca
 // d'água nem reverter has_achievements — ver UpsertGameIdentity).
-func (s *Syncer) upsertGameIdentity(ctx context.Context, og steam.OwnedGame) (dbgen.Game, error) {
+func (s *Syncer) upsertGameIdentity(ctx context.Context, integID pgtype.UUID, og steam.OwnedGame) (dbgen.Game, error) {
 	icon := ""
 	if og.ImgIconURL != "" {
 		icon = fmt.Sprintf(iconURLFmt, og.AppID, og.ImgIconURL)
 	}
 	return s.q.UpsertGameIdentity(ctx, dbgen.UpsertGameIdentityParams{
+		IntegrationID:   integID,
 		Platform:        "steam",
 		ExternalID:      strconv.Itoa(og.AppID),
 		NpServiceName:   nil,
@@ -391,11 +399,11 @@ func (s *Syncer) sealAndMaybeClose(ctx context.Context, runID pgtype.UUID, total
 	}
 	s.logger.Info("fan-out selado", slog.String("scope", scope), slog.Int("games_total", total))
 	if row.Closed {
-		s.onRunClose(bgctx, "steam", row.Scope, row.GamesFailed)
+		s.onRunClose(bgctx, row.IntegrationID, row.Scope, row.GamesFailed)
 	}
 }
 
-func (s *Syncer) finalizeChild(ctx context.Context, runID pgtype.UUID, failed bool, changed int, platform string) {
+func (s *Syncer) finalizeChild(ctx context.Context, runID pgtype.UUID, failed bool, changed int) {
 	bgctx, cancel := bg(ctx)
 	defer cancel()
 	failedN := int32(0)
@@ -410,27 +418,30 @@ func (s *Syncer) finalizeChild(ctx context.Context, runID pgtype.UUID, failed bo
 		return
 	}
 	if row.Closed {
-		s.onRunClose(bgctx, platform, row.Scope, row.GamesFailed)
+		s.onRunClose(bgctx, row.IntegrationID, row.Scope, row.GamesFailed)
 	}
 }
 
 // onRunClose roda uma única vez por run (quem observa closed==true) e reflete o resultado na
 // integração e na métrica.
-func (s *Syncer) onRunClose(ctx context.Context, platform, scope string, gamesFailed int32) {
+func (s *Syncer) onRunClose(ctx context.Context, integID pgtype.UUID, scope string, gamesFailed int32) {
+	if !integID.Valid {
+		return // conta removida (sync_runs.integration_id ON DELETE SET NULL)
+	}
 	if gamesFailed == 0 {
 		metrics.SyncRun(scope, "ok")
 		if err := s.q.MarkIntegrationSynced(ctx, dbgen.MarkIntegrationSyncedParams{
-			Platform: platform, MarkInitial: scope == ScopeFull,
+			ID: integID, MarkInitial: scope == ScopeFull,
 		}); err != nil {
 			s.logger.Error("falha ao marcar integração sincronizada", slog.String("err", err.Error()))
 			return
 		}
-		s.setStatus(platform, "connected")
+		s.setStatus("steam", "connected")
 		return
 	}
 	metrics.SyncRun(scope, "error")
 	// Falhas: só atualiza last_synced_at; o status de erro foi definido pelos filhos mortos.
-	if err := s.q.TouchIntegrationSynced(ctx, platform); err != nil {
+	if err := s.q.TouchIntegrationSynced(ctx, integID); err != nil {
 		s.logger.Error("falha ao tocar last_synced_at", slog.String("err", err.Error()))
 	}
 }
@@ -452,23 +463,23 @@ func (s *Syncer) failRun(ctx context.Context, runID pgtype.UUID, msg string) {
 }
 
 // failPlatform fecha o run com erro e reflete o erro na integração (permanente ou transitório).
-func (s *Syncer) failPlatform(ctx context.Context, runID pgtype.UUID, cause error) {
+func (s *Syncer) failPlatform(ctx context.Context, runID, integID pgtype.UUID, cause error) {
 	msg := "falha ao listar biblioteca Steam"
 	switch {
 	case errors.Is(cause, steam.ErrProfilePrivate):
-		s.setPermanentStatus(ctx, "steam", cause)
+		s.setPermanentStatus(ctx, integID, cause)
 		msg = "perfil Steam não é público"
 	case errors.Is(cause, steam.ErrInvalidKey):
-		s.setPermanentStatus(ctx, "steam", cause)
+		s.setPermanentStatus(ctx, integID, cause)
 		msg = "API key Steam inválida ou sem permissão"
 	default:
-		s.setTransientErrorStatus(ctx, "steam", cause)
+		s.setTransientErrorStatus(ctx, integID, cause)
 	}
 	s.failRun(ctx, runID, msg)
 }
 
 // setPermanentStatus define o status de erro definitivo da integração com mensagem sanitizada.
-func (s *Syncer) setPermanentStatus(ctx context.Context, platform string, cause error) {
+func (s *Syncer) setPermanentStatus(ctx context.Context, integID pgtype.UUID, cause error) {
 	status, msg := "error", "erro ao sincronizar"
 	switch {
 	case errors.Is(cause, steam.ErrProfilePrivate):
@@ -476,28 +487,28 @@ func (s *Syncer) setPermanentStatus(ctx context.Context, platform string, cause 
 	case errors.Is(cause, steam.ErrInvalidKey):
 		status, msg = "error", "API key Steam inválida ou sem permissão"
 	}
-	s.applyIntegrationStatus(ctx, platform, status, msg)
+	s.applyIntegrationStatus(ctx, integID, status, msg)
 }
 
 // setTransientErrorStatus marca a integração em erro (chamado só quando o job já morreu).
-func (s *Syncer) setTransientErrorStatus(ctx context.Context, platform string, _ error) {
-	s.applyIntegrationStatus(ctx, platform, "error", "falha ao sincronizar; tente novamente")
+func (s *Syncer) setTransientErrorStatus(ctx context.Context, integID pgtype.UUID, _ error) {
+	s.applyIntegrationStatus(ctx, integID, "error", "falha ao sincronizar; tente novamente")
 }
 
-func (s *Syncer) applyIntegrationStatus(ctx context.Context, platform, status, msg string) {
+func (s *Syncer) applyIntegrationStatus(ctx context.Context, integID pgtype.UUID, status, msg string) {
 	bgctx, cancel := bg(ctx)
 	defer cancel()
 	if err := s.q.UpdateIntegrationStatus(ctx, dbgen.UpdateIntegrationStatusParams{
-		Platform: platform, Status: status, LastError: truncateErr(msg),
+		ID: integID, Status: status, LastError: truncateErr(msg),
 	}); err != nil {
 		// tenta de novo no contexto desacoplado
 		if err2 := s.q.UpdateIntegrationStatus(bgctx, dbgen.UpdateIntegrationStatusParams{
-			Platform: platform, Status: status, LastError: truncateErr(msg),
+			ID: integID, Status: status, LastError: truncateErr(msg),
 		}); err2 != nil {
 			s.logger.Error("falha ao atualizar status da integração", slog.String("err", err2.Error()))
 		}
 	}
-	s.setStatus(platform, status)
+	s.setStatus("steam", status)
 }
 
 // remoteChanged indica se a marca d'água (remote_updated_at) difere do rtime remoto atual.
@@ -555,4 +566,20 @@ func truncateErr(s string) string {
 		cut--
 	}
 	return s[:cut]
+}
+
+// platformIntegrationID devolve a conta do job. Jobs enfileirados antes da migration 00013 (multi-
+// conta) só carregam a plataforma: nesse caso usa a conta mais antiga da plataforma.
+func (s *Syncer) platformIntegrationID(ctx context.Context, p PlatformPayload) (pgtype.UUID, error) {
+	if p.IntegrationID != "" {
+		return parseUUID(p.IntegrationID)
+	}
+	integs, err := s.q.ListIntegrationsByPlatform(ctx, p.Platform)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	if len(integs) == 0 {
+		return pgtype.UUID{}, ErrNotConnected
+	}
+	return integs[0].ID, nil
 }

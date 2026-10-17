@@ -62,6 +62,11 @@ type testEnv struct {
 
 func setup(t *testing.T) *testEnv {
 	t.Helper()
+	return setupWith(t, func(string) syncpkg.SteamAPI { return fakeSteam{} })
+}
+
+func setupWith(t *testing.T, factory syncpkg.SteamFactory) *testEnv {
+	t.Helper()
 	pool := testsupport.NewPostgres(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -74,7 +79,7 @@ func setup(t *testing.T) *testEnv {
 	jobs := queue.NewPostgres(pool, queue.DefaultBackoff)
 	syncer := syncpkg.New(syncpkg.Deps{
 		Queries: q, Pool: pool, Queue: jobs, Cipher: cipher,
-		SteamFactory: func(string) syncpkg.SteamAPI { return fakeSteam{} },
+		SteamFactory: factory,
 		Logger:       logger,
 	})
 
@@ -143,11 +148,11 @@ func TestConnectSyncAndBrowse(t *testing.T) {
 	e := setup(t)
 
 	// Connect Steam.
-	resp := e.do(t, http.MethodPut, "/api/v1/integrations/steam",
-		`{"api_key":"FAKEKEY","steam_id_or_vanity":"76561197960000000"}`, true)
+	resp := e.do(t, http.MethodPost, "/api/v1/integrations/steam",
+		`{"label":"Principal","api_key":"FAKEKEY","steam_id_or_vanity":"76561197960000000"}`, true)
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	require.Equal(t, http.StatusCreated, resp.StatusCode, string(body))
 	require.NotContains(t, string(body), "FAKEKEY", "nunca retornar a API key")
 
 	// Processa o full sync enfileirado.

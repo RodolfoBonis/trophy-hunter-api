@@ -13,26 +13,36 @@ import (
 
 const countGames = `-- name: CountGames :one
 WITH agg AS (
-    SELECT g.id, g.platform, g.has_achievements, g.normalized_title, g.abandoned,
+    SELECT g.id, g.platform, g.external_id, g.has_achievements, g.normalized_title, g.abandoned,
         COUNT(t.id)                         AS total,
-        COUNT(t.id) FILTER (WHERE t.earned) AS earned
+        COUNT(t.id) FILTER (WHERE t.earned) AS earned,
+        MAX(t.earned_at)::timestamptz       AS last_unlock_at
     FROM games g
     LEFT JOIN trophies t ON t.game_id = g.id
+    WHERE ($5::uuid IS NULL OR g.integration_id = $5::uuid)
     GROUP BY g.id
 ),
 scored AS (
-    SELECT id, platform, has_achievements, normalized_title, abandoned, total, earned,
+    SELECT id, platform, external_id, has_achievements, normalized_title, abandoned, total, earned, last_unlock_at,
+        (CASE WHEN total > 0 THEN earned::float8 / total ELSE 0 END)::float8 AS completion_pct,
         CASE
             WHEN abandoned                                      THEN 'abandoned'
             WHEN total > 0 AND earned = total                   THEN 'completed'
-            WHEN total > 0 AND earned::float8 / total >= $5::float8 THEN 'almost'
+            WHEN total > 0 AND earned::float8 / total >= $6::float8 THEN 'almost'
             WHEN earned > 0                                     THEN 'in_progress'
             ELSE 'not_started'
         END AS status_bucket
     FROM agg
+),
+ranked AS (
+    SELECT id, platform, external_id, has_achievements, normalized_title, abandoned, total, earned, last_unlock_at, completion_pct, status_bucket,
+        ROW_NUMBER() OVER (PARTITION BY platform, external_id
+                           ORDER BY completion_pct DESC, earned DESC, last_unlock_at DESC NULLS LAST, id) AS account_rank
+    FROM scored
 )
-SELECT COUNT(*) FROM scored
-WHERE ($1::text IS NULL OR platform = $1::text)
+SELECT COUNT(*) FROM ranked
+WHERE account_rank = 1
+  AND ($1::text IS NULL OR platform = $1::text)
   AND ($2::boolean IS NULL OR has_achievements = $2::boolean)
   AND ($3::text IS NULL OR normalized_title ILIKE '%' || $3::text || '%' ESCAPE '\')
   AND ($4::text IS NULL OR status_bucket = $4::text)
@@ -43,6 +53,7 @@ type CountGamesParams struct {
 	HasAchievements *bool
 	Q               *string
 	Status          *string
+	IntegrationID   pgtype.UUID
 	Almost          float64
 }
 
@@ -52,6 +63,7 @@ func (q *Queries) CountGames(ctx context.Context, arg CountGamesParams) (int64, 
 		arg.HasAchievements,
 		arg.Q,
 		arg.Status,
+		arg.IntegrationID,
 		arg.Almost,
 	)
 	var count int64
@@ -60,16 +72,16 @@ func (q *Queries) CountGames(ctx context.Context, arg CountGamesParams) (int64, 
 }
 
 const getGameByExternal = `-- name: GetGameByExternal :one
-SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at FROM games WHERE platform = $1 AND external_id = $2
+SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id FROM games WHERE integration_id = $1 AND external_id = $2
 `
 
 type GetGameByExternalParams struct {
-	Platform   string
-	ExternalID string
+	IntegrationID pgtype.UUID
+	ExternalID    string
 }
 
 func (q *Queries) GetGameByExternal(ctx context.Context, arg GetGameByExternalParams) (Game, error) {
-	row := q.db.QueryRow(ctx, getGameByExternal, arg.Platform, arg.ExternalID)
+	row := q.db.QueryRow(ctx, getGameByExternal, arg.IntegrationID, arg.ExternalID)
 	var i Game
 	err := row.Scan(
 		&i.ID,
@@ -95,12 +107,13 @@ func (q *Queries) GetGameByExternal(ctx context.Context, arg GetGameByExternalPa
 		&i.Tags,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IntegrationID,
 	)
 	return i, err
 }
 
 const getGameByID = `-- name: GetGameByID :one
-SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at FROM games WHERE id = $1
+SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id FROM games WHERE id = $1
 `
 
 func (q *Queries) GetGameByID(ctx context.Context, id pgtype.UUID) (Game, error) {
@@ -130,35 +143,135 @@ func (q *Queries) GetGameByID(ctx context.Context, id pgtype.UUID) (Game, error)
 		&i.Tags,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IntegrationID,
 	)
 	return i, err
 }
 
-const listGames = `-- name: ListGames :many
+const listGameAccounts = `-- name: ListGameAccounts :many
 WITH agg AS (
-    SELECT g.id, g.platform, g.external_id, g.np_service_name, g.unified_game_id, g.title, g.normalized_title, g.icon, g.cover, g.platforms, g.has_achievements, g.has_platinum, g.last_played_at, g.playtime_minutes, g.remote_updated_at, g.schema_synced_at, g.percentages_synced_at, g.abandoned, g.priority, g.notes, g.tags, g.created_at, g.updated_at,
+    SELECT g.id, g.integration_id, g.platform, g.external_id, g.abandoned, i.label AS account_label,
+        i.display_name AS account_display_name,
+        COUNT(t.id)                         AS total,
+        COUNT(t.id) FILTER (WHERE t.earned) AS earned,
+        MAX(t.earned_at)::timestamptz       AS last_unlock_at,
+        COALESCE(bool_or(t.type = 'platinum' AND t.earned), false)::boolean AS has_platinum_earned
+    FROM games g
+    JOIN integrations i ON i.id = g.integration_id
+    LEFT JOIN trophies t ON t.game_id = g.id
+    WHERE (g.platform || ':' || g.external_id) = ANY($2::text[])
+    GROUP BY g.id, i.label, i.display_name
+)
+SELECT id, integration_id, platform, external_id, abandoned, account_label, account_display_name, total, earned, last_unlock_at, has_platinum_earned,
+    (CASE WHEN total > 0 THEN earned::float8 / total ELSE 0 END)::float8 AS completion_pct,
+    CASE
+        WHEN abandoned                                      THEN 'abandoned'
+        WHEN total > 0 AND earned = total                   THEN 'completed'
+        WHEN total > 0 AND earned::float8 / total >= $1::float8 THEN 'almost'
+        WHEN earned > 0                                     THEN 'in_progress'
+        ELSE 'not_started'
+    END AS status_bucket
+FROM agg
+ORDER BY platform, external_id,
+    (CASE WHEN total > 0 THEN earned::float8 / total ELSE 0 END) DESC, earned DESC,
+    last_unlock_at DESC NULLS LAST, id
+`
+
+type ListGameAccountsParams struct {
+	Almost float64
+	Keys   []string
+}
+
+type ListGameAccountsRow struct {
+	ID                 pgtype.UUID
+	IntegrationID      pgtype.UUID
+	Platform           string
+	ExternalID         string
+	Abandoned          bool
+	AccountLabel       string
+	AccountDisplayName string
+	Total              int64
+	Earned             int64
+	LastUnlockAt       pgtype.Timestamptz
+	HasPlatinumEarned  bool
+	CompletionPct      float64
+	StatusBucket       string
+}
+
+// Todas as contas que possuem os jogos dados (chaves "platform:external_id"), com o progresso de
+// cada uma, já na ordem "mais avançada primeiro" (mesmo critério do best da biblioteca).
+func (q *Queries) ListGameAccounts(ctx context.Context, arg ListGameAccountsParams) ([]ListGameAccountsRow, error) {
+	rows, err := q.db.Query(ctx, listGameAccounts, arg.Almost, arg.Keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGameAccountsRow{}
+	for rows.Next() {
+		var i ListGameAccountsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.IntegrationID,
+			&i.Platform,
+			&i.ExternalID,
+			&i.Abandoned,
+			&i.AccountLabel,
+			&i.AccountDisplayName,
+			&i.Total,
+			&i.Earned,
+			&i.LastUnlockAt,
+			&i.HasPlatinumEarned,
+			&i.CompletionPct,
+			&i.StatusBucket,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGames = `-- name: ListGames :many
+
+WITH agg AS (
+    SELECT g.id, g.platform, g.external_id, g.np_service_name, g.unified_game_id, g.title, g.normalized_title, g.icon, g.cover, g.platforms, g.has_achievements, g.has_platinum, g.last_played_at, g.playtime_minutes, g.remote_updated_at, g.schema_synced_at, g.percentages_synced_at, g.abandoned, g.priority, g.notes, g.tags, g.created_at, g.updated_at, g.integration_id, i.label AS account_label,
         COUNT(t.id)                                                        AS total,
         COUNT(t.id) FILTER (WHERE t.earned)                                AS earned,
-        COALESCE(AVG(t.rarity_pct) FILTER (WHERE NOT t.earned), 0)::float8  AS avg_remaining_rarity
+        COALESCE(AVG(t.rarity_pct) FILTER (WHERE NOT t.earned), 0)::float8  AS avg_remaining_rarity,
+        MAX(t.earned_at)::timestamptz                                      AS last_unlock_at
     FROM games g
+    JOIN integrations i ON i.id = g.integration_id
     LEFT JOIN trophies t ON t.game_id = g.id
-    GROUP BY g.id
+    WHERE ($8::uuid IS NULL OR g.integration_id = $8::uuid)
+    GROUP BY g.id, i.label
 ),
 scored AS (
-    SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, total, earned, avg_remaining_rarity,
+    SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, account_label, total, earned, avg_remaining_rarity, last_unlock_at,
         (total - earned)::bigint                                             AS remaining,
         (CASE WHEN total > 0 THEN earned::float8 / total ELSE 0 END)::float8 AS completion_pct,
         CASE
             WHEN abandoned                                      THEN 'abandoned'
             WHEN total > 0 AND earned = total                   THEN 'completed'
-            WHEN total > 0 AND earned::float8 / total >= $8::float8 THEN 'almost'
+            WHEN total > 0 AND earned::float8 / total >= $9::float8 THEN 'almost'
             WHEN earned > 0                                     THEN 'in_progress'
             ELSE 'not_started'
         END                                                                  AS status_bucket
     FROM agg
+),
+ranked AS (
+    SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, account_label, total, earned, avg_remaining_rarity, last_unlock_at, remaining, completion_pct, status_bucket,
+        ROW_NUMBER() OVER w AS account_rank,
+        COUNT(*) OVER (PARTITION BY platform, external_id) AS account_count
+    FROM scored
+    WINDOW w AS (PARTITION BY platform, external_id
+                 ORDER BY completion_pct DESC, earned DESC, last_unlock_at DESC NULLS LAST, id)
 )
-SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, total, earned, avg_remaining_rarity, remaining, completion_pct, status_bucket FROM scored
-WHERE ($1::text IS NULL OR platform = $1::text)
+SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, account_label, total, earned, avg_remaining_rarity, last_unlock_at, remaining, completion_pct, status_bucket, account_rank, account_count FROM ranked
+WHERE account_rank = 1
+  AND ($1::text IS NULL OR platform = $1::text)
   AND ($2::boolean IS NULL OR has_achievements = $2::boolean)
   AND ($3::text IS NULL OR normalized_title ILIKE '%' || $3::text || '%' ESCAPE '\')
   AND ($4::text IS NULL OR status_bucket = $4::text)
@@ -181,6 +294,7 @@ type ListGamesParams struct {
 	Sort            string
 	Off             int32
 	Lim             int32
+	IntegrationID   pgtype.UUID
 	Almost          float64
 }
 
@@ -208,14 +322,24 @@ type ListGamesRow struct {
 	Tags                []string
 	CreatedAt           pgtype.Timestamptz
 	UpdatedAt           pgtype.Timestamptz
+	IntegrationID       pgtype.UUID
+	AccountLabel        string
 	Total               int64
 	Earned              int64
 	AvgRemainingRarity  float64
+	LastUnlockAt        pgtype.Timestamptz
 	Remaining           int64
 	CompletionPct       float64
 	StatusBucket        string
+	AccountRank         int64
+	AccountCount        int64
 }
 
+// A biblioteca agrupa o MESMO jogo (platform + external_id) de várias contas em UMA entrada,
+// representada pela conta MAIS AVANÇADA ("best"): maior % concluído; empate → mais troféus
+// ganhos; empate → desbloqueio mais recente. Filtros e ordenação valem sobre a linha best.
+// account_count = em quantas contas o jogo existe (no escopo do filtro de conta, se houver).
+// Esta é a mesma regra das estatísticas: somar contas, mas cada jogo conta uma vez (o best).
 func (q *Queries) ListGames(ctx context.Context, arg ListGamesParams) ([]ListGamesRow, error) {
 	rows, err := q.db.Query(ctx, listGames,
 		arg.Platform,
@@ -225,6 +349,7 @@ func (q *Queries) ListGames(ctx context.Context, arg ListGamesParams) ([]ListGam
 		arg.Sort,
 		arg.Off,
 		arg.Lim,
+		arg.IntegrationID,
 		arg.Almost,
 	)
 	if err != nil {
@@ -258,60 +383,17 @@ func (q *Queries) ListGames(ctx context.Context, arg ListGamesParams) ([]ListGam
 			&i.Tags,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.IntegrationID,
+			&i.AccountLabel,
 			&i.Total,
 			&i.Earned,
 			&i.AvgRemainingRarity,
+			&i.LastUnlockAt,
 			&i.Remaining,
 			&i.CompletionPct,
 			&i.StatusBucket,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listGamesByPlatform = `-- name: ListGamesByPlatform :many
-SELECT id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at FROM games WHERE platform = $1 ORDER BY id
-`
-
-func (q *Queries) ListGamesByPlatform(ctx context.Context, platform string) ([]Game, error) {
-	rows, err := q.db.Query(ctx, listGamesByPlatform, platform)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Game{}
-	for rows.Next() {
-		var i Game
-		if err := rows.Scan(
-			&i.ID,
-			&i.Platform,
-			&i.ExternalID,
-			&i.NpServiceName,
-			&i.UnifiedGameID,
-			&i.Title,
-			&i.NormalizedTitle,
-			&i.Icon,
-			&i.Cover,
-			&i.Platforms,
-			&i.HasAchievements,
-			&i.HasPlatinum,
-			&i.LastPlayedAt,
-			&i.PlaytimeMinutes,
-			&i.RemoteUpdatedAt,
-			&i.SchemaSyncedAt,
-			&i.PercentagesSyncedAt,
-			&i.Abandoned,
-			&i.Priority,
-			&i.Notes,
-			&i.Tags,
-			&i.CreatedAt,
-			&i.UpdatedAt,
+			&i.AccountRank,
+			&i.AccountCount,
 		); err != nil {
 			return nil, err
 		}
@@ -364,12 +446,12 @@ func (q *Queries) SetGameWatermark(ctx context.Context, arg SetGameWatermarkPara
 
 const upsertGameIdentity = `-- name: UpsertGameIdentity :one
 INSERT INTO games (
-    platform, external_id, np_service_name, title, normalized_title, icon, cover, platforms,
-    has_achievements, last_played_at, playtime_minutes, updated_at
+    integration_id, platform, external_id, np_service_name, title, normalized_title, icon, cover,
+    platforms, has_achievements, last_played_at, playtime_minutes, updated_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now()
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now()
 )
-ON CONFLICT (platform, external_id) DO UPDATE SET
+ON CONFLICT (integration_id, external_id) DO UPDATE SET
     np_service_name   = EXCLUDED.np_service_name,
     title             = EXCLUDED.title,
     normalized_title  = EXCLUDED.normalized_title,
@@ -379,10 +461,11 @@ ON CONFLICT (platform, external_id) DO UPDATE SET
     last_played_at    = EXCLUDED.last_played_at,
     playtime_minutes  = EXCLUDED.playtime_minutes,
     updated_at        = now()
-RETURNING id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at
+RETURNING id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id
 `
 
 type UpsertGameIdentityParams struct {
+	IntegrationID   pgtype.UUID
 	Platform        string
 	ExternalID      string
 	NpServiceName   *string
@@ -410,6 +493,7 @@ type UpsertGameIdentityParams struct {
 // Em INSERT (jogo novo), has_achievements vem do parâmetro (has_community_visible_stats).
 func (q *Queries) UpsertGameIdentity(ctx context.Context, arg UpsertGameIdentityParams) (Game, error) {
 	row := q.db.QueryRow(ctx, upsertGameIdentity,
+		arg.IntegrationID,
 		arg.Platform,
 		arg.ExternalID,
 		arg.NpServiceName,
@@ -447,6 +531,7 @@ func (q *Queries) UpsertGameIdentity(ctx context.Context, arg UpsertGameIdentity
 		&i.Tags,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IntegrationID,
 	)
 	return i, err
 }

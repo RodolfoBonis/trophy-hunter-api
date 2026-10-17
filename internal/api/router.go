@@ -67,9 +67,10 @@ func NewRouter(d RouterDeps) http.Handler {
 		r.Get("/me", h.getMe)
 
 		r.Get("/integrations", h.listIntegrations)
-		r.Put("/integrations/steam", h.connectSteam)
-		r.Delete("/integrations/{platform}", h.deleteIntegration)
-		r.Post("/integrations/{platform}/sync", h.syncPlatform)
+		r.Post("/integrations/steam", h.connectSteam)
+		r.Patch("/integrations/{id}", h.updateIntegration)
+		r.Delete("/integrations/{id}", h.deleteIntegration)
+		r.Post("/integrations/{id}/sync", h.syncIntegration)
 
 		r.Get("/games", h.listGames)
 		r.Get("/games/{id}", h.getGame)

@@ -62,13 +62,13 @@ func TestSmokeEndToEndRealClient(t *testing.T) {
 		SteamFactory: factory, Logger: testLogger(),
 	})
 
-	integ, err := syncer.ConnectSteam(ctx, "REALISH_KEY", "76561197960000000")
+	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "REALISH_KEY", IDOrVanity: "76561197960000000"})
 	require.NoError(t, err)
 	require.Equal(t, "connected", integ.Status)
 
 	processAll(t, jobs, syncer)
 
-	game, err := q.GetGameByExternal(ctx, dbgen.GetGameByExternalParams{Platform: "steam", ExternalID: "620"})
+	game, err := q.GetGameByExternal(ctx, dbgen.GetGameByExternalParams{IntegrationID: integ.ID, ExternalID: "620"})
 	require.NoError(t, err)
 	require.True(t, game.HasAchievements)
 	require.True(t, strings.Contains(game.Cover, "library_600x900.jpg"))

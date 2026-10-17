@@ -48,7 +48,7 @@ SET games_done    = games_done + 1,
                   ELSE status END,
     finished_at = CASE WHEN fanout_sealed AND games_done + 1 >= games_total THEN now() ELSE finished_at END
 WHERE id = $1 AND status = 'running'
-RETURNING (fanout_sealed AND games_done >= games_total)::boolean AS closed, games_failed, scope
+RETURNING (fanout_sealed AND games_done >= games_total)::boolean AS closed, games_failed, scope, integration_id
 `
 
 type FinalizeSyncRunChildParams struct {
@@ -58,9 +58,10 @@ type FinalizeSyncRunChildParams struct {
 }
 
 type FinalizeSyncRunChildRow struct {
-	Closed      bool
-	GamesFailed int32
-	Scope       string
+	Closed        bool
+	GamesFailed   int32
+	Scope         string
+	IntegrationID pgtype.UUID
 }
 
 // Contabiliza o término (terminal) de UM job filho. Fecha o run quando o fan-out está selado e
@@ -68,24 +69,31 @@ type FinalizeSyncRunChildRow struct {
 func (q *Queries) FinalizeSyncRunChild(ctx context.Context, arg FinalizeSyncRunChildParams) (FinalizeSyncRunChildRow, error) {
 	row := q.db.QueryRow(ctx, finalizeSyncRunChild, arg.ID, arg.Failed, arg.Changed)
 	var i FinalizeSyncRunChildRow
-	err := row.Scan(&i.Closed, &i.GamesFailed, &i.Scope)
+	err := row.Scan(
+		&i.Closed,
+		&i.GamesFailed,
+		&i.Scope,
+		&i.IntegrationID,
+	)
 	return i, err
 }
 
 const listSyncRuns = `-- name: ListSyncRuns :many
 SELECT id, integration_id, platform, scope, trigger, status, started_at, finished_at, items_changed, games_touched, error, created_at, games_total, games_done, games_failed, fanout_sealed FROM sync_runs
 WHERE ($2::text IS NULL OR platform = $2::text)
+  AND ($3::uuid IS NULL OR integration_id = $3::uuid)
 ORDER BY started_at DESC
 LIMIT $1
 `
 
 type ListSyncRunsParams struct {
-	Limit    int32
-	Platform *string
+	Limit         int32
+	Platform      *string
+	IntegrationID pgtype.UUID
 }
 
 func (q *Queries) ListSyncRuns(ctx context.Context, arg ListSyncRunsParams) ([]SyncRun, error) {
-	rows, err := q.db.Query(ctx, listSyncRuns, arg.Limit, arg.Platform)
+	rows, err := q.db.Query(ctx, listSyncRuns, arg.Limit, arg.Platform, arg.IntegrationID)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +161,7 @@ SET games_total   = $2::int,
                   ELSE status END,
     finished_at = CASE WHEN games_done >= $2::int THEN now() ELSE finished_at END
 WHERE id = $1 AND status = 'running'
-RETURNING (games_done >= games_total)::boolean AS closed, games_failed, scope
+RETURNING (games_done >= games_total)::boolean AS closed, games_failed, scope, integration_id
 `
 
 type SealSyncRunParams struct {
@@ -162,9 +170,10 @@ type SealSyncRunParams struct {
 }
 
 type SealSyncRunRow struct {
-	Closed      bool
-	GamesFailed int32
-	Scope       string
+	Closed        bool
+	GamesFailed   int32
+	Scope         string
+	IntegrationID pgtype.UUID
 }
 
 // Fixa games_total e marca o fan-out concluído. Se todos os filhos já terminaram (corrida com
@@ -172,7 +181,12 @@ type SealSyncRunRow struct {
 func (q *Queries) SealSyncRun(ctx context.Context, arg SealSyncRunParams) (SealSyncRunRow, error) {
 	row := q.db.QueryRow(ctx, sealSyncRun, arg.ID, arg.GamesTotal)
 	var i SealSyncRunRow
-	err := row.Scan(&i.Closed, &i.GamesFailed, &i.Scope)
+	err := row.Scan(
+		&i.Closed,
+		&i.GamesFailed,
+		&i.Scope,
+		&i.IntegrationID,
+	)
 	return i, err
 }
 

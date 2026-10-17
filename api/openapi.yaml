@@ -50,25 +50,28 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
 
   /integrations/steam:
-    put:
+    post:
       tags: [integrations]
       operationId: connectSteam
-      summary: Conecta/atualiza a integração Steam.
+      summary: Conecta uma nova conta Steam.
       description: >
-        Valida a API key e o SteamID64/vanity contra a Steam, grava as credenciais cifradas e
-        enfileira um full sync. O perfil deve ser público. Nunca retorna a API key.
+        Várias contas por plataforma são suportadas. Valida o SteamID64/vanity contra a Steam,
+        grava as credenciais cifradas e enfileira um full sync. api_key é opcional quando já existe
+        outra conta Steam (a Steam Web API key lê qualquer perfil público e é reaproveitada). O
+        perfil e os detalhes de jogos devem ser públicos. Nunca retorna a API key.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/ConnectSteamRequest" }
       responses:
-        "200":
-          description: Integração conectada; full sync enfileirado.
+        "201":
+          description: Conta conectada; full sync enfileirado.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Integration" }
         "401": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
         "502":
           description: Falha ao validar com a Steam (chave inválida, perfil privado, etc.).
@@ -76,25 +79,50 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
-  /integrations/{platform}:
+  /integrations/{id}:
+    patch:
+      tags: [integrations]
+      operationId: updateIntegration
+      summary: Renomeia a conta e/ou troca a API key.
+      parameters:
+        - $ref: "#/components/parameters/IntegrationIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateIntegrationRequest" }
+      responses:
+        "200":
+          description: Conta atualizada.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Integration" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "502":
+          description: A Steam rejeitou a nova API key.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
     delete:
       tags: [integrations]
       operationId: deleteIntegration
-      summary: Remove a integração de uma plataforma.
+      summary: Remove a conta e os jogos/troféus dela.
       parameters:
-        - $ref: "#/components/parameters/PlatformPath"
+        - $ref: "#/components/parameters/IntegrationIDPath"
       responses:
         "204": { description: Removida. }
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
-  /integrations/{platform}/sync:
+  /integrations/{id}/sync:
     post:
       tags: [sync]
-      operationId: syncPlatform
-      summary: Enfileira uma sincronização da plataforma.
+      operationId: syncIntegration
+      summary: Enfileira uma sincronização da conta.
       parameters:
-        - $ref: "#/components/parameters/PlatformPath"
+        - $ref: "#/components/parameters/IntegrationIDPath"
       requestBody:
         required: false
         content:
@@ -135,6 +163,10 @@ paths:
           in: query
           required: false
           schema: { $ref: "#/components/schemas/Platform" }
+        - name: integration_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
         - name: limit
           in: query
           required: false
@@ -158,6 +190,10 @@ paths:
         - name: platform
           in: query
           schema: { $ref: "#/components/schemas/Platform" }
+        - name: integration_id
+          in: query
+          description: Restringe a biblioteca a UMA conta (default — todas, um item por jogo).
+          schema: { type: string, format: uuid }
         - name: status
           in: query
           schema: { $ref: "#/components/schemas/GameStatus" }
@@ -216,11 +252,11 @@ components:
       scheme: bearer
       bearerFormat: JWT
   parameters:
-    PlatformPath:
-      name: platform
+    IntegrationIDPath:
+      name: id
       in: path
       required: true
-      schema: { $ref: "#/components/schemas/Platform" }
+      schema: { type: string, format: uuid }
     GameIDPath:
       name: id
       in: path
@@ -260,9 +296,11 @@ components:
         name: { type: string }
     Integration:
       type: object
-      required: [platform, status]
+      required: [id, platform, label, status]
       properties:
+        id: { type: string, format: uuid }
         platform: { $ref: "#/components/schemas/Platform" }
+        label: { type: string, description: "Apelido da conta no app (ex.: Principal, Alt)." }
         status: { $ref: "#/components/schemas/IntegrationStatus" }
         account_id: { type: string }
         display_name: { type: string }
@@ -271,14 +309,25 @@ components:
         last_error: { type: string }
     ConnectSteamRequest:
       type: object
-      required: [api_key, steam_id_or_vanity]
+      required: [steam_id_or_vanity]
       properties:
+        label:
+          type: string
+          maxLength: 40
+          description: Apelido da conta. Vazio → nome do perfil na Steam.
         api_key:
           type: string
-          description: Steam Web API key (https://steamcommunity.com/dev/apikey). Nunca é retornada.
+          description: >
+            Steam Web API key (https://steamcommunity.com/dev/apikey). Obrigatória só na primeira
+            conta Steam; nas seguintes, omitida → reaproveita a key existente. Nunca é retornada.
         steam_id_or_vanity:
           type: string
           description: SteamID64 (17 dígitos) ou a vanity URL (nome do perfil).
+    UpdateIntegrationRequest:
+      type: object
+      properties:
+        label: { type: string, minLength: 1, maxLength: 40 }
+        api_key: { type: string, description: "Nova Steam Web API key (validada contra a conta)." }
     SyncRequest:
       type: object
       properties:
@@ -299,6 +348,7 @@ components:
       required: [id, platform, scope, trigger, status, started_at]
       properties:
         id: { type: string, format: uuid }
+        integration_id: { type: [string, "null"], format: uuid, description: "Conta do run (null se removida)." }
         platform: { $ref: "#/components/schemas/Platform" }
         scope:
           type: string
@@ -380,13 +430,29 @@ components:
         tags:
           type: array
           items: { $ref: "#/components/schemas/TrophyTag" }
+    GameAccount:
+      type: object
+      description: Uma conta que possui o jogo, com o progresso dela.
+      required: [integration_id, label, display_name, game_id, progress]
+      properties:
+        integration_id: { type: string, format: uuid }
+        label: { type: string }
+        display_name: { type: string }
+        game_id: { type: string, format: uuid, description: "Linha do jogo nesta conta (GET /games/{id})." }
+        progress: { $ref: "#/components/schemas/ProgressSummary" }
     GameListItem:
+      description: >
+        Um item por jogo (platform + external_id). Game/progress são da conta MAIS AVANÇADA (id =
+        game_id dela); accounts lista todas as contas que possuem o jogo, mais avançada primeiro.
       allOf:
         - $ref: "#/components/schemas/Game"
         - type: object
-          required: [progress]
+          required: [progress, accounts]
           properties:
             progress: { $ref: "#/components/schemas/ProgressSummary" }
+            accounts:
+              type: array
+              items: { $ref: "#/components/schemas/GameAccount" }
     GameListPage:
       type: object
       required: [items, total, limit, offset]
@@ -401,12 +467,18 @@ components:
       allOf:
         - $ref: "#/components/schemas/Game"
         - type: object
-          required: [progress, groups]
+          required: [integration_id, account_label, progress, groups, accounts]
           properties:
+            integration_id: { type: string, format: uuid, description: "Conta desta linha do jogo." }
+            account_label: { type: string }
             progress: { $ref: "#/components/schemas/ProgressDetail" }
             groups:
               type: array
               items: { $ref: "#/components/schemas/TrophyGroup" }
+            accounts:
+              type: array
+              description: Todas as contas que possuem o jogo (mais avançada primeiro).
+              items: { $ref: "#/components/schemas/GameAccount" }
     TrophyGroup:
       type: object
       required: [id, external_id, name, is_base, trophies]

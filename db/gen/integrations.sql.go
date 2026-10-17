@@ -7,23 +7,42 @@ package dbgen
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const deleteIntegration = `-- name: DeleteIntegration :exec
-DELETE FROM integrations WHERE platform = $1
+const createIntegration = `-- name: CreateIntegration :one
+INSERT INTO integrations (
+    platform, label, status, account_id, display_name, avatar, credentials_enc, key_version,
+    last_error, initial_sync_done, updated_at
+) VALUES (
+    $1, $2, 'connected', $3, $4, $5, $6, $7, '', false, now()
+)
+RETURNING id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label
 `
 
-func (q *Queries) DeleteIntegration(ctx context.Context, platform string) error {
-	_, err := q.db.Exec(ctx, deleteIntegration, platform)
-	return err
+type CreateIntegrationParams struct {
+	Platform       string
+	Label          string
+	AccountID      string
+	DisplayName    string
+	Avatar         string
+	CredentialsEnc []byte
+	KeyVersion     int32
 }
 
-const getIntegration = `-- name: GetIntegration :one
-SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at FROM integrations WHERE platform = $1
-`
-
-func (q *Queries) GetIntegration(ctx context.Context, platform string) (Integration, error) {
-	row := q.db.QueryRow(ctx, getIntegration, platform)
+// Cria a conexão com uma conta gravando as credenciais cifradas e a identidade da conta.
+// initial_sync_done=false: o primeiro full sync não gera unlock_events.
+func (q *Queries) CreateIntegration(ctx context.Context, arg CreateIntegrationParams) (Integration, error) {
+	row := q.db.QueryRow(ctx, createIntegration,
+		arg.Platform,
+		arg.Label,
+		arg.AccountID,
+		arg.DisplayName,
+		arg.Avatar,
+		arg.CredentialsEnc,
+		arg.KeyVersion,
+	)
 	var i Integration
 	err := row.Scan(
 		&i.ID,
@@ -41,12 +60,86 @@ func (q *Queries) GetIntegration(ctx context.Context, platform string) (Integrat
 		&i.InitialSyncDone,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Label,
+	)
+	return i, err
+}
+
+const deleteIntegration = `-- name: DeleteIntegration :exec
+DELETE FROM integrations WHERE id = $1
+`
+
+// Remove a conta; os jogos dela (e troféus/grupos/eventos) caem em cascata.
+func (q *Queries) DeleteIntegration(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteIntegration, id)
+	return err
+}
+
+const getIntegration = `-- name: GetIntegration :one
+
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label FROM integrations WHERE id = $1
+`
+
+// Integrações: várias contas por plataforma (ver migration 00013). Tudo é endereçado pelo id.
+func (q *Queries) GetIntegration(ctx context.Context, id pgtype.UUID) (Integration, error) {
+	row := q.db.QueryRow(ctx, getIntegration, id)
+	var i Integration
+	err := row.Scan(
+		&i.ID,
+		&i.Platform,
+		&i.Status,
+		&i.AccountID,
+		&i.DisplayName,
+		&i.Avatar,
+		&i.CredentialsEnc,
+		&i.KeyVersion,
+		&i.AccessTokenExpiresAt,
+		&i.RefreshTokenExpiresAt,
+		&i.LastError,
+		&i.LastSyncedAt,
+		&i.InitialSyncDone,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Label,
+	)
+	return i, err
+}
+
+const getIntegrationByAccount = `-- name: GetIntegrationByAccount :one
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label FROM integrations WHERE platform = $1 AND account_id = $2
+`
+
+type GetIntegrationByAccountParams struct {
+	Platform  string
+	AccountID string
+}
+
+func (q *Queries) GetIntegrationByAccount(ctx context.Context, arg GetIntegrationByAccountParams) (Integration, error) {
+	row := q.db.QueryRow(ctx, getIntegrationByAccount, arg.Platform, arg.AccountID)
+	var i Integration
+	err := row.Scan(
+		&i.ID,
+		&i.Platform,
+		&i.Status,
+		&i.AccountID,
+		&i.DisplayName,
+		&i.Avatar,
+		&i.CredentialsEnc,
+		&i.KeyVersion,
+		&i.AccessTokenExpiresAt,
+		&i.RefreshTokenExpiresAt,
+		&i.LastError,
+		&i.LastSyncedAt,
+		&i.InitialSyncDone,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Label,
 	)
 	return i, err
 }
 
 const listIntegrations = `-- name: ListIntegrations :many
-SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at FROM integrations ORDER BY platform
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label FROM integrations ORDER BY platform, created_at
 `
 
 func (q *Queries) ListIntegrations(ctx context.Context) ([]Integration, error) {
@@ -74,6 +167,48 @@ func (q *Queries) ListIntegrations(ctx context.Context) ([]Integration, error) {
 			&i.InitialSyncDone,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Label,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIntegrationsByPlatform = `-- name: ListIntegrationsByPlatform :many
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label FROM integrations WHERE platform = $1 ORDER BY created_at
+`
+
+func (q *Queries) ListIntegrationsByPlatform(ctx context.Context, platform string) ([]Integration, error) {
+	rows, err := q.db.Query(ctx, listIntegrationsByPlatform, platform)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Integration{}
+	for rows.Next() {
+		var i Integration
+		if err := rows.Scan(
+			&i.ID,
+			&i.Platform,
+			&i.Status,
+			&i.AccountID,
+			&i.DisplayName,
+			&i.Avatar,
+			&i.CredentialsEnc,
+			&i.KeyVersion,
+			&i.AccessTokenExpiresAt,
+			&i.RefreshTokenExpiresAt,
+			&i.LastError,
+			&i.LastSyncedAt,
+			&i.InitialSyncDone,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Label,
 		); err != nil {
 			return nil, err
 		}
@@ -90,131 +225,79 @@ UPDATE integrations
 SET last_synced_at = now(), status = 'connected', last_error = '',
     initial_sync_done = initial_sync_done OR $2::boolean,
     updated_at = now()
-WHERE platform = $1
+WHERE id = $1
 `
 
 type MarkIntegrationSyncedParams struct {
-	Platform    string
+	ID          pgtype.UUID
 	MarkInitial bool
 }
 
 // Fecho de sync BEM-SUCEDIDO: marca last_synced_at, volta a status connected e limpa o erro.
 // initial_sync_done só é ligado quando mark_initial (full inicial sem falhas).
 func (q *Queries) MarkIntegrationSynced(ctx context.Context, arg MarkIntegrationSyncedParams) error {
-	_, err := q.db.Exec(ctx, markIntegrationSynced, arg.Platform, arg.MarkInitial)
+	_, err := q.db.Exec(ctx, markIntegrationSynced, arg.ID, arg.MarkInitial)
 	return err
 }
 
 const touchIntegrationSynced = `-- name: TouchIntegrationSynced :exec
 UPDATE integrations
 SET last_synced_at = now(), updated_at = now()
-WHERE platform = $1
+WHERE id = $1
 `
 
 // Fecho de sync COM falhas: só atualiza last_synced_at (preserva o status de erro que os jobs
 // filhos mortos já definiram). Não volta a connected.
-func (q *Queries) TouchIntegrationSynced(ctx context.Context, platform string) error {
-	_, err := q.db.Exec(ctx, touchIntegrationSynced, platform)
+func (q *Queries) TouchIntegrationSynced(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, touchIntegrationSynced, id)
 	return err
 }
 
-const updateIntegrationAccount = `-- name: UpdateIntegrationAccount :exec
+const updateIntegrationCredentials = `-- name: UpdateIntegrationCredentials :exec
 UPDATE integrations
-SET display_name = $2, avatar = $3, account_id = $4, updated_at = now()
-WHERE platform = $1
+SET credentials_enc = $2, key_version = $3, updated_at = now()
+WHERE id = $1
 `
 
-type UpdateIntegrationAccountParams struct {
-	Platform    string
-	DisplayName string
-	Avatar      string
-	AccountID   string
+type UpdateIntegrationCredentialsParams struct {
+	ID             pgtype.UUID
+	CredentialsEnc []byte
+	KeyVersion     int32
 }
 
-func (q *Queries) UpdateIntegrationAccount(ctx context.Context, arg UpdateIntegrationAccountParams) error {
-	_, err := q.db.Exec(ctx, updateIntegrationAccount,
-		arg.Platform,
-		arg.DisplayName,
-		arg.Avatar,
-		arg.AccountID,
-	)
+// Troca as credenciais cifradas (ex.: nova API key) sem mexer na identidade nem no histórico.
+func (q *Queries) UpdateIntegrationCredentials(ctx context.Context, arg UpdateIntegrationCredentialsParams) error {
+	_, err := q.db.Exec(ctx, updateIntegrationCredentials, arg.ID, arg.CredentialsEnc, arg.KeyVersion)
+	return err
+}
+
+const updateIntegrationLabel = `-- name: UpdateIntegrationLabel :exec
+UPDATE integrations SET label = $2, updated_at = now() WHERE id = $1
+`
+
+type UpdateIntegrationLabelParams struct {
+	ID    pgtype.UUID
+	Label string
+}
+
+func (q *Queries) UpdateIntegrationLabel(ctx context.Context, arg UpdateIntegrationLabelParams) error {
+	_, err := q.db.Exec(ctx, updateIntegrationLabel, arg.ID, arg.Label)
 	return err
 }
 
 const updateIntegrationStatus = `-- name: UpdateIntegrationStatus :exec
 UPDATE integrations
 SET status = $2, last_error = $3, updated_at = now()
-WHERE platform = $1
+WHERE id = $1
 `
 
 type UpdateIntegrationStatusParams struct {
-	Platform  string
+	ID        pgtype.UUID
 	Status    string
 	LastError string
 }
 
 func (q *Queries) UpdateIntegrationStatus(ctx context.Context, arg UpdateIntegrationStatusParams) error {
-	_, err := q.db.Exec(ctx, updateIntegrationStatus, arg.Platform, arg.Status, arg.LastError)
+	_, err := q.db.Exec(ctx, updateIntegrationStatus, arg.ID, arg.Status, arg.LastError)
 	return err
-}
-
-const upsertIntegrationCredentials = `-- name: UpsertIntegrationCredentials :one
-INSERT INTO integrations (
-    platform, status, account_id, display_name, avatar, credentials_enc, key_version,
-    last_error, initial_sync_done, updated_at
-) VALUES (
-    $1, 'connected', $2, $3, $4, $5, $6, '', false, now()
-)
-ON CONFLICT (platform) DO UPDATE SET
-    status            = 'connected',
-    account_id        = EXCLUDED.account_id,
-    display_name      = EXCLUDED.display_name,
-    avatar            = EXCLUDED.avatar,
-    credentials_enc   = EXCLUDED.credentials_enc,
-    key_version       = EXCLUDED.key_version,
-    last_error        = '',
-    initial_sync_done = false,
-    updated_at        = now()
-RETURNING id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at
-`
-
-type UpsertIntegrationCredentialsParams struct {
-	Platform       string
-	AccountID      string
-	DisplayName    string
-	Avatar         string
-	CredentialsEnc []byte
-	KeyVersion     int32
-}
-
-// Cria/atualiza a conexão com uma plataforma gravando as credenciais cifradas e a identidade da
-// conta. Reseta initial_sync_done=false para que o próximo full sync (re)conecte sem gerar eventos.
-func (q *Queries) UpsertIntegrationCredentials(ctx context.Context, arg UpsertIntegrationCredentialsParams) (Integration, error) {
-	row := q.db.QueryRow(ctx, upsertIntegrationCredentials,
-		arg.Platform,
-		arg.AccountID,
-		arg.DisplayName,
-		arg.Avatar,
-		arg.CredentialsEnc,
-		arg.KeyVersion,
-	)
-	var i Integration
-	err := row.Scan(
-		&i.ID,
-		&i.Platform,
-		&i.Status,
-		&i.AccountID,
-		&i.DisplayName,
-		&i.Avatar,
-		&i.CredentialsEnc,
-		&i.KeyVersion,
-		&i.AccessTokenExpiresAt,
-		&i.RefreshTokenExpiresAt,
-		&i.LastError,
-		&i.LastSyncedAt,
-		&i.InitialSyncDone,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
 }

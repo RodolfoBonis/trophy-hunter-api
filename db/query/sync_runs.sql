@@ -16,7 +16,7 @@ SET games_total   = sqlc.arg(games_total)::int,
                   ELSE status END,
     finished_at = CASE WHEN games_done >= sqlc.arg(games_total)::int THEN now() ELSE finished_at END
 WHERE id = $1 AND status = 'running'
-RETURNING (games_done >= games_total)::boolean AS closed, games_failed, scope;
+RETURNING (games_done >= games_total)::boolean AS closed, games_failed, scope, integration_id;
 
 -- name: FinalizeSyncRunChild :one
 -- Contabiliza o término (terminal) de UM job filho. Fecha o run quando o fan-out está selado e
@@ -30,7 +30,7 @@ SET games_done    = games_done + 1,
                   ELSE status END,
     finished_at = CASE WHEN fanout_sealed AND games_done + 1 >= games_total THEN now() ELSE finished_at END
 WHERE id = $1 AND status = 'running'
-RETURNING (fanout_sealed AND games_done >= games_total)::boolean AS closed, games_failed, scope;
+RETURNING (fanout_sealed AND games_done >= games_total)::boolean AS closed, games_failed, scope, integration_id;
 
 -- name: FailSyncRun :exec
 -- Fecha o run como erro (ex.: falha ao listar a biblioteca, antes do fan-out).
@@ -55,6 +55,7 @@ WHERE r.status = 'running'
 -- name: ListSyncRuns :many
 SELECT * FROM sync_runs
 WHERE (sqlc.narg(platform)::text IS NULL OR platform = sqlc.narg(platform)::text)
+  AND (sqlc.narg(integration_id)::uuid IS NULL OR integration_id = sqlc.narg(integration_id)::uuid)
 ORDER BY started_at DESC
 LIMIT $1;
 

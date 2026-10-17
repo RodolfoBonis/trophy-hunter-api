@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -60,7 +61,7 @@ const (
 // do job esteja cancelado (context.WithoutCancel). Ver finding 8.
 const bgTimeout = 10 * time.Second
 
-// ErrNotConnected indica que não há integração conectada para a plataforma.
+// ErrNotConnected indica que a integração (conta) não existe — ex.: removida.
 var ErrNotConnected = errors.New("integração não conectada")
 
 // SteamAPI é a superfície do cliente Steam usada pelo syncer (mockável em testes).
@@ -78,10 +79,11 @@ type SteamFactory func(apiKey string) SteamAPI
 
 // PlatformPayload é o payload do job sync_platform.
 type PlatformPayload struct {
-	Platform  string `json:"platform"`
-	Scope     string `json:"scope"`
-	Trigger   string `json:"trigger"`
-	SyncRunID string `json:"sync_run_id"`
+	IntegrationID string `json:"integration_id"`
+	Platform      string `json:"platform"`
+	Scope         string `json:"scope"`
+	Trigger       string `json:"trigger"`
+	SyncRunID     string `json:"sync_run_id"`
 }
 
 // GamePayload é o payload do job sync_game.
@@ -140,10 +142,10 @@ func New(d Deps) *Syncer {
 	}
 }
 
-// EnqueuePlatformSync cria o run PAI e enfileira o job sync_platform (dedupe por plataforma+scope).
-// Se o enfileiramento for suprimido por dedupe, o run recém-criado é removido (sem órfão).
-func (s *Syncer) EnqueuePlatformSync(ctx context.Context, platform, scope, trigger string) (*queue.Job, bool, error) {
-	integ, err := s.q.GetIntegration(ctx, platform)
+// EnqueuePlatformSync cria o run PAI e enfileira o job sync_platform de UMA conta (dedupe por
+// conta+scope). Se o enfileiramento for suprimido por dedupe, o run recém-criado é removido.
+func (s *Syncer) EnqueuePlatformSync(ctx context.Context, integrationID pgtype.UUID, scope, trigger string) (*queue.Job, bool, error) {
+	integ, err := s.q.GetIntegration(ctx, integrationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, ErrNotConnected
 	}
@@ -152,7 +154,7 @@ func (s *Syncer) EnqueuePlatformSync(ctx context.Context, platform, scope, trigg
 	}
 
 	run, err := s.q.StartSyncRun(ctx, dbgen.StartSyncRunParams{
-		IntegrationID: integ.ID, Platform: platform, Scope: scope, Trigger: trigger,
+		IntegrationID: integ.ID, Platform: integ.Platform, Scope: scope, Trigger: trigger,
 		GamesTotal: 0, Sealed: false,
 	})
 	if err != nil {
@@ -160,9 +162,12 @@ func (s *Syncer) EnqueuePlatformSync(ctx context.Context, platform, scope, trigg
 	}
 
 	job, enq, err := s.queue.Enqueue(ctx, queue.EnqueueParams{
-		Kind:      KindSyncPlatform,
-		Payload:   PlatformPayload{Platform: platform, Scope: scope, Trigger: trigger, SyncRunID: uuidStr(run.ID)},
-		DedupeKey: fmt.Sprintf("%s:%s:%s", KindSyncPlatform, platform, scope),
+		Kind: KindSyncPlatform,
+		Payload: PlatformPayload{
+			IntegrationID: uuidStr(integ.ID), Platform: integ.Platform, Scope: scope, Trigger: trigger,
+			SyncRunID: uuidStr(run.ID),
+		},
+		DedupeKey: fmt.Sprintf("%s:%s:%s", KindSyncPlatform, uuidStr(integ.ID), scope),
 	})
 	if err != nil || !enq {
 		s.deleteRun(ctx, run.ID)
@@ -184,7 +189,7 @@ func (s *Syncer) EnqueueGameSync(ctx context.Context, gameID, trigger string) (*
 	if err != nil {
 		return nil, false, fmt.Errorf("carregar jogo: %w", err)
 	}
-	integ, err := s.q.GetIntegration(ctx, game.Platform)
+	integ, err := s.q.GetIntegration(ctx, game.IntegrationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, ErrNotConnected
 	}
@@ -235,9 +240,9 @@ func (s *Syncer) HandleJob(ctx context.Context, job queue.Job) error {
 	}
 }
 
-// loadSteam carrega a integração Steam, decifra as credenciais e constrói o cliente.
-func (s *Syncer) loadSteam(ctx context.Context) (dbgen.Integration, SteamAPI, steamCredentials, error) {
-	integ, err := s.q.GetIntegration(ctx, "steam")
+// loadSteam carrega a integração (conta) Steam, decifra as credenciais e constrói o cliente.
+func (s *Syncer) loadSteam(ctx context.Context, integrationID pgtype.UUID) (dbgen.Integration, SteamAPI, steamCredentials, error) {
+	integ, err := s.q.GetIntegration(ctx, integrationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return dbgen.Integration{}, nil, steamCredentials{}, ErrNotConnected
 	}
@@ -312,4 +317,10 @@ func uuidStr(u pgtype.UUID) string {
 // setStatus reflete o status da integração no gauge de métrica.
 func (s *Syncer) setStatus(platform, status string) {
 	metrics.SetIntegrationStatus(platform, status)
+}
+
+// isUniqueViolation indica violação de UNIQUE no Postgres (SQLSTATE 23505).
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

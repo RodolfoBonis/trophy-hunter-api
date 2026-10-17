@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/httperr"
@@ -20,18 +21,10 @@ type syncRequest struct {
 }
 
 // syncPlatform enfileira um sync da plataforma — POST /integrations/{platform}/sync.
-func (h *Handlers) syncPlatform(w http.ResponseWriter, r *http.Request) {
-	platform := chi.URLParam(r, "platform")
-	if !validPlatform(platform) {
-		httperr.Write(w, r, httperr.New(httperr.KindBadRequest, "Bad request", "plataforma inválida"))
-		return
-	}
-	if _, err := h.q.GetIntegration(r.Context(), platform); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			httperr.Write(w, r, httperr.New(httperr.KindNotFound, "Not found", "integração não conectada"))
-			return
-		}
-		httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
+// syncIntegration enfileira o sync de UMA conta — POST /integrations/{id}/sync.
+func (h *Handlers) syncIntegration(w http.ResponseWriter, r *http.Request) {
+	integ, ok := h.loadIntegrationParam(w, r)
+	if !ok {
 		return
 	}
 
@@ -48,7 +41,7 @@ func (h *Handlers) syncPlatform(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, enq, err := h.syncer.EnqueuePlatformSync(r.Context(), platform, scope, syncpkg.TriggerManual)
+	job, enq, err := h.syncer.EnqueuePlatformSync(r.Context(), integ.ID, scope, syncpkg.TriggerManual)
 	if err != nil {
 		h.writeEnqueueError(w, r, err)
 		return
@@ -99,6 +92,15 @@ func (h *Handlers) listSyncRuns(w http.ResponseWriter, r *http.Request) {
 		}
 		platform = &p
 	}
+	var integrationID pgtype.UUID
+	if v := r.URL.Query().Get("integration_id"); v != "" {
+		id, err := parseUUIDParam(v)
+		if err != nil {
+			httperr.Write(w, r, httperr.New(httperr.KindBadRequest, "Bad request", "integration_id inválido"))
+			return
+		}
+		integrationID = id
+	}
 	limit := 50
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil {
@@ -107,7 +109,7 @@ func (h *Handlers) listSyncRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	limit = clamp(limit, 1, 200)
 
-	runs, err := h.q.ListSyncRuns(r.Context(), dbgen.ListSyncRunsParams{Limit: int32(limit), Platform: platform}) //nolint:gosec // limit clamped
+	runs, err := h.q.ListSyncRuns(r.Context(), dbgen.ListSyncRunsParams{Limit: int32(limit), Platform: platform, IntegrationID: integrationID}) //nolint:gosec // limit clamped
 	if err != nil {
 		httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
 		return

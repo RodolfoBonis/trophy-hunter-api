@@ -32,6 +32,7 @@ type Game struct {
 	Tags                []string
 	CreatedAt           pgtype.Timestamptz
 	UpdatedAt           pgtype.Timestamptz
+	IntegrationID       pgtype.UUID
 }
 
 type Integration struct {
@@ -50,6 +51,7 @@ type Integration struct {
 	InitialSyncDone       bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
+	Label                 string
 }
 
 type Job struct {
