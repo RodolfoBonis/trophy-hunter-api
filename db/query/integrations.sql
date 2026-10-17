@@ -56,3 +56,14 @@ WHERE id = $1;
 -- name: DeleteIntegration :exec
 -- Remove a conta; os jogos dela (e troféus/grupos/eventos) caem em cascata.
 DELETE FROM integrations WHERE id = $1;
+
+-- name: UpdateIntegrationTokens :exec
+-- Grava tokens renovados (PSN): credenciais cifradas + validades (para renovar antes de expirar e
+-- avisar quando o refresh estiver perto de vencer).
+UPDATE integrations
+SET credentials_enc = $2, key_version = $3,
+    access_token_expires_at = $4, refresh_token_expires_at = $5, updated_at = now()
+WHERE id = $1;
+
+-- name: UpdateIntegrationProfile :exec
+UPDATE integrations SET display_name = $2, avatar = $3, updated_at = now() WHERE id = $1;

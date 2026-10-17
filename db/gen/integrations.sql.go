@@ -285,6 +285,21 @@ func (q *Queries) UpdateIntegrationLabel(ctx context.Context, arg UpdateIntegrat
 	return err
 }
 
+const updateIntegrationProfile = `-- name: UpdateIntegrationProfile :exec
+UPDATE integrations SET display_name = $2, avatar = $3, updated_at = now() WHERE id = $1
+`
+
+type UpdateIntegrationProfileParams struct {
+	ID          pgtype.UUID
+	DisplayName string
+	Avatar      string
+}
+
+func (q *Queries) UpdateIntegrationProfile(ctx context.Context, arg UpdateIntegrationProfileParams) error {
+	_, err := q.db.Exec(ctx, updateIntegrationProfile, arg.ID, arg.DisplayName, arg.Avatar)
+	return err
+}
+
 const updateIntegrationStatus = `-- name: UpdateIntegrationStatus :exec
 UPDATE integrations
 SET status = $2, last_error = $3, updated_at = now()
@@ -299,5 +314,33 @@ type UpdateIntegrationStatusParams struct {
 
 func (q *Queries) UpdateIntegrationStatus(ctx context.Context, arg UpdateIntegrationStatusParams) error {
 	_, err := q.db.Exec(ctx, updateIntegrationStatus, arg.ID, arg.Status, arg.LastError)
+	return err
+}
+
+const updateIntegrationTokens = `-- name: UpdateIntegrationTokens :exec
+UPDATE integrations
+SET credentials_enc = $2, key_version = $3,
+    access_token_expires_at = $4, refresh_token_expires_at = $5, updated_at = now()
+WHERE id = $1
+`
+
+type UpdateIntegrationTokensParams struct {
+	ID                    pgtype.UUID
+	CredentialsEnc        []byte
+	KeyVersion            int32
+	AccessTokenExpiresAt  pgtype.Timestamptz
+	RefreshTokenExpiresAt pgtype.Timestamptz
+}
+
+// Grava tokens renovados (PSN): credenciais cifradas + validades (para renovar antes de expirar e
+// avisar quando o refresh estiver perto de vencer).
+func (q *Queries) UpdateIntegrationTokens(ctx context.Context, arg UpdateIntegrationTokensParams) error {
+	_, err := q.db.Exec(ctx, updateIntegrationTokens,
+		arg.ID,
+		arg.CredentialsEnc,
+		arg.KeyVersion,
+		arg.AccessTokenExpiresAt,
+		arg.RefreshTokenExpiresAt,
+	)
 	return err
 }

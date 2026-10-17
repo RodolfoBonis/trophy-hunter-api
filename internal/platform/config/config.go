@@ -37,6 +37,7 @@ type Config struct {
 	Telemetry         Telemetry
 	Sync              Sync
 	Steam             Steam
+	PSN               PSN
 	WorkerConcurrency int `env:"WORKER_CONCURRENCY" envDefault:"4"`
 }
 
@@ -116,6 +117,19 @@ type Sync struct {
 	Enabled    bool          `env:"SYNC_ENABLED" envDefault:"true"`
 	Interval   time.Duration `env:"SYNC_INTERVAL" envDefault:"6h"`
 	JobTimeout time.Duration `env:"JOB_TIMEOUT" envDefault:"5m"`
+}
+
+// PSN configura o cliente da API (não oficial) de troféus da PlayStation.
+//
+//   - AuthBaseURL/APIBaseURL são configuráveis para servidores fake em testes.
+//   - Lang é o Accept-Language (nomes/descrições localizados).
+//   - RPS/Burst: a PSN limita ~300 req/15 min por conta; 0.5 rps sustentado com pico 5 fica abaixo.
+type PSN struct {
+	AuthBaseURL string  `env:"PSN_AUTH_BASE_URL" envDefault:"https://ca.account.sony.com/api/authz/v3/oauth"`
+	APIBaseURL  string  `env:"PSN_API_BASE_URL" envDefault:"https://m.np.playstation.com/api"`
+	Lang        string  `env:"PSN_LANG" envDefault:"pt-BR"`
+	RPS         float64 `env:"PSN_RPS" envDefault:"0.5"`
+	Burst       int     `env:"PSN_BURST" envDefault:"5"`
 }
 
 // Steam configura o cliente da Steam Web API.

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/psn"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steam"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/httperr"
 	syncpkg "github.com/RodolfoBonis/trophy-hunter-api/internal/sync"
@@ -169,3 +170,74 @@ func mapSteamError(err error) *httperr.Error {
 }
 
 func validPlatform(p string) bool { return p == "steam" || p == "psn" }
+
+type connectPSNRequest struct {
+	Label string `json:"label"`
+	NPSSO string `json:"npsso"`
+}
+
+// connectPSN conecta uma conta PSN pelo NPSSO — POST /integrations/psn. O NPSSO só é usado para
+// obter os tokens; nunca é gravado nem retornado.
+func (h *Handlers) connectPSN(w http.ResponseWriter, r *http.Request) {
+	var req connectPSNRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httperr.Write(w, r, httperr.New(httperr.KindBadRequest, "Bad request", "corpo JSON inválido"))
+		return
+	}
+	if strings.TrimSpace(req.NPSSO) == "" {
+		httperr.Write(w, r, httperr.Validation("npsso obrigatório", httperr.FieldError{Field: "npsso", Code: "required"}))
+		return
+	}
+	if len(strings.TrimSpace(req.Label)) > maxLabelLen {
+		httperr.Write(w, r, httperr.Validation("apelido longo demais", httperr.FieldError{Field: "label", Code: "too_long"}))
+		return
+	}
+	integ, err := h.syncer.ConnectPSN(r.Context(), syncpkg.ConnectPSNParams{Label: req.Label, NPSSO: req.NPSSO})
+	if err != nil {
+		httperr.Write(w, r, mapPSNError(err))
+		return
+	}
+	writeJSON(w, http.StatusCreated, toIntegrationDTO(integ))
+}
+
+type reconnectRequest struct {
+	NPSSO string `json:"npsso"`
+}
+
+// reconnectIntegration troca um NPSSO novo para uma conta PSN expirada — POST /integrations/{id}/reconnect.
+func (h *Handlers) reconnectIntegration(w http.ResponseWriter, r *http.Request) {
+	integ, ok := h.loadIntegrationParam(w, r)
+	if !ok {
+		return
+	}
+	var req reconnectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httperr.Write(w, r, httperr.New(httperr.KindBadRequest, "Bad request", "corpo JSON inválido"))
+		return
+	}
+	if strings.TrimSpace(req.NPSSO) == "" {
+		httperr.Write(w, r, httperr.Validation("npsso obrigatório", httperr.FieldError{Field: "npsso", Code: "required"}))
+		return
+	}
+	updated, err := h.syncer.ReconnectPSN(r.Context(), integ.ID, req.NPSSO)
+	if err != nil {
+		httperr.Write(w, r, mapPSNError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, toIntegrationDTO(updated))
+}
+
+func mapPSNError(err error) *httperr.Error {
+	switch {
+	case errors.Is(err, syncpkg.ErrAccountExists):
+		return httperr.New(httperr.KindConflict, "Conta já conectada", "essa conta PSN já está conectada")
+	case errors.Is(err, syncpkg.ErrAccountMismatch):
+		return httperr.Validation("o NPSSO é de outra conta PSN", httperr.FieldError{Field: "npsso", Code: "account_mismatch"})
+	case errors.Is(err, psn.ErrInvalidNPSSO), errors.Is(err, psn.ErrInvalidGrant):
+		return httperr.Validation("NPSSO inválido ou expirado", httperr.FieldError{Field: "npsso", Code: "invalid"})
+	case errors.Is(err, syncpkg.ErrNotConnected):
+		return httperr.New(httperr.KindNotFound, "Not found", "integração não encontrada")
+	default:
+		return httperr.New(httperr.KindBadGateway, "Falha ao falar com a PSN", "tente novamente em instantes")
+	}
+}

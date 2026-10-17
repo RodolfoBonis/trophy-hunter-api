@@ -118,6 +118,7 @@ type Syncer struct {
 	queue        queue.Queue
 	cipher       *crypto.Cipher
 	steamFactory SteamFactory
+	psn          PSNAPI
 	logger       *slog.Logger
 }
 
@@ -128,7 +129,9 @@ type Deps struct {
 	Queue        queue.Queue
 	Cipher       *crypto.Cipher
 	SteamFactory SteamFactory
-	Logger       *slog.Logger
+	// PSN é o cliente da PlayStation (uma instância por processo; nil desliga a PSN).
+	PSN    PSNAPI
+	Logger *slog.Logger
 }
 
 // New constrói o Syncer.
@@ -139,6 +142,7 @@ func New(d Deps) *Syncer {
 		queue:        d.Queue,
 		cipher:       d.Cipher,
 		steamFactory: d.SteamFactory,
+		psn:          d.PSN,
 		logger:       d.Logger,
 	}
 }

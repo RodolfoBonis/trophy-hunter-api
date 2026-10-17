@@ -34,16 +34,23 @@ func (s *Syncer) handlePlatform(ctx context.Context, p PlatformPayload) error {
 		return fmt.Errorf("sync_run_id inválido: %w", err)
 	}
 
-	if p.Platform != "steam" {
-		s.logger.Warn("plataforma ainda não suportada no sync", slog.String("platform", p.Platform))
-		s.closeEmptyRun(ctx, runID)
-		return nil
-	}
-
 	integID, err := s.platformIntegrationID(ctx, p)
 	if err != nil {
 		s.failRun(ctx, runID, "integração não conectada")
 		return nil //nolint:nilerr // conta removida: nada a fazer, o run fecha como erro
+	}
+	switch p.Platform {
+	case "steam":
+	case "psn":
+		if s.psn == nil {
+			s.failRun(ctx, runID, "cliente PSN não configurado")
+			return nil
+		}
+		return s.handlePSNPlatform(ctx, p, runID, integID)
+	default:
+		s.logger.Warn("plataforma não suportada no sync", slog.String("platform", p.Platform))
+		s.closeEmptyRun(ctx, runID)
+		return nil
 	}
 	integ, client, creds, err := s.loadSteam(ctx, integID)
 	if errors.Is(err, ErrNotConnected) {
@@ -158,6 +165,13 @@ func (s *Syncer) handleGame(ctx context.Context, job queue.Job, p GamePayload) e
 		return s.gameTransient(ctx, job, runID, pgtype.UUID{}, fmt.Errorf("carregar jogo: %w", err))
 	}
 	integID := game.IntegrationID
+	if game.Platform == "psn" {
+		if s.psn == nil {
+			s.finalizeChild(ctx, runID, true, 0)
+			return nil
+		}
+		return s.handlePSNGame(ctx, job, p, runID, game)
+	}
 
 	_, client, creds, err := s.loadSteam(ctx, integID)
 	if errors.Is(err, ErrNotConnected) {
@@ -500,6 +514,11 @@ func (s *Syncer) setTransientErrorStatus(ctx context.Context, integID pgtype.UUI
 }
 
 func (s *Syncer) applyIntegrationStatus(ctx context.Context, integID pgtype.UUID, status, msg string) {
+	s.applyIntegrationStatusFor(ctx, integID, "steam", status, msg)
+}
+
+// applyIntegrationStatusFor grava status/erro da integração e reflete na métrica da plataforma.
+func (s *Syncer) applyIntegrationStatusFor(ctx context.Context, integID pgtype.UUID, platform, status, msg string) {
 	bgctx, cancel := bg(ctx)
 	defer cancel()
 	if err := s.q.UpdateIntegrationStatus(ctx, dbgen.UpdateIntegrationStatusParams{
@@ -512,7 +531,7 @@ func (s *Syncer) applyIntegrationStatus(ctx context.Context, integID pgtype.UUID
 			s.logger.Error("falha ao atualizar status da integração", slog.String("err", err2.Error()))
 		}
 	}
-	s.setStatus("steam", status)
+	s.setStatus(platform, status)
 }
 
 // remoteChanged indica se a marca d'água (remote_updated_at) difere do rtime remoto atual.

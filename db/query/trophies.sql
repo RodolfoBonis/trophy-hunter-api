@@ -42,3 +42,7 @@ SELECT * FROM trophies WHERE game_id = $1 ORDER BY type, name;
 -- No máximo UM evento por troféu (uq_unlock_events_trophy); re-detecções do diff não duplicam.
 INSERT INTO unlock_events (trophy_id, detected_at) VALUES ($1, now())
 ON CONFLICT (trophy_id) DO NOTHING;
+
+-- name: SetTrophyProgress :exec
+-- Progresso de troféus com contador (PSN: "87/120"); independe da definição.
+UPDATE trophies SET progress = $2, target = $3, updated_at = now() WHERE id = $1;

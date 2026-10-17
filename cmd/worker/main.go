@@ -14,6 +14,7 @@ import (
 	trophyhunter "github.com/RodolfoBonis/trophy-hunter-api"
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
 	migrations "github.com/RodolfoBonis/trophy-hunter-api/db/migrations"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/psn"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steam"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/config"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/crypto"
@@ -91,6 +92,7 @@ func run() error {
 	syncer := syncpkg.New(syncpkg.Deps{
 		Queries: queries, Pool: pool, Queue: jobs, Cipher: cipher,
 		SteamFactory: steamFactory, Logger: logger,
+		PSN: psn.New(psn.Options{AuthBaseURL: cfg.PSN.AuthBaseURL, APIBaseURL: cfg.PSN.APIBaseURL, Lang: cfg.PSN.Lang, RPS: cfg.PSN.RPS, Burst: cfg.PSN.Burst, Logger: logger}),
 	})
 
 	worker := syncpkg.NewWorker(jobs, queries, syncer, cfg.WorkerConcurrency, cfg.Sync.JobTimeout, logger)

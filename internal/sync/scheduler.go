@@ -73,7 +73,8 @@ func (s *Scheduler) tick(ctx context.Context) {
 		return
 	}
 	for _, i := range integs {
-		if i.Status == "disabled" {
+		// Conta desativada ou à espera de um NPSSO novo: o sync só falharia até o usuário reconectar.
+		if i.Status == "disabled" || i.Status == "needs_reconnect" {
 			continue
 		}
 		_, enq, err := s.syncer.EnqueuePlatformSync(ctx, i.ID, ScopeIncremental, TriggerSchedule)

@@ -79,6 +79,58 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /integrations/psn:
+    post:
+      tags: [integrations]
+      operationId: connectPSN
+      summary: Conecta uma conta PSN pelo NPSSO.
+      description: >
+        Troca o NPSSO (cookie do login em playstation.com; ver https://ca.account.sony.com/api/v1/ssocookie)
+        por access/refresh tokens e enfileira um full sync. O NPSSO nunca é gravado nem retornado; as
+        renovações usam só o refresh token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConnectPSNRequest" }
+      responses:
+        "201":
+          description: Conta conectada; full sync enfileirado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Integration" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+
+  /integrations/{id}/reconnect:
+    post:
+      tags: [integrations]
+      operationId: reconnectIntegration
+      summary: Reconecta uma conta PSN expirada com um NPSSO novo (precisa ser a mesma conta).
+      parameters:
+        - $ref: "#/components/parameters/IntegrationIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [npsso]
+              properties:
+                npsso: { type: string }
+      responses:
+        "200":
+          description: Reconectada; sync incremental enfileirado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Integration" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+
   /integrations/{id}:
     patch:
       tags: [integrations]
@@ -428,6 +480,12 @@ components:
         steam_id_or_vanity:
           type: string
           description: SteamID64 (17 dígitos) ou a vanity URL (nome do perfil).
+    ConnectPSNRequest:
+      type: object
+      required: [npsso]
+      properties:
+        label: { type: string, maxLength: 40, description: "Apelido; vazio → online ID." }
+        npsso: { type: string, description: "Cookie npsso do login em playstation.com. Nunca é gravado." }
     UpdateIntegrationRequest:
       type: object
       properties:

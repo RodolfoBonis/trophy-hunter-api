@@ -62,6 +62,19 @@ biblioteca (`GET /games`) devolve **um item por jogo** representado pela conta *
 estatísticas somam as contas, mas cada jogo conta uma vez (o da conta mais avançada).
 `?integration_id=` restringe a uma conta.
 
+## Conectar a PSN (NPSSO)
+
+A PSN não tem API oficial; o Trophy Hunter usa a mesma API do app (como a lib `psn-api`). Para conectar:
+
+1. Entre em https://www.playstation.com com a sua conta.
+2. Na mesma janela, abra https://ca.account.sony.com/api/v1/ssocookie e copie o valor de `npsso`.
+3. Em **Contas → Conectar PSN**, cole o NPSSO (ou `POST /api/v1/integrations/psn {"npsso": "..."}`).
+
+O NPSSO só é trocado por access/refresh tokens e **nunca é gravado**. As renovações usam o refresh token
+(vale ~2 meses). Quando ele expira, a conta fica em **Reconectar**: cole um NPSSO novo
+(`POST /api/v1/integrations/{id}/reconnect`) — precisa ser da mesma conta. Taxa padrão: `PSN_RPS=0.5`
+(a PSN limita ~300 requisições a cada 15 min).
+
 ## Como o sync funciona
 
 O sync usa **fan-out** para caber no orçamento de cada job (`JOB_TIMEOUT`) mesmo com rate limit baixo:

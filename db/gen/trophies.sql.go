@@ -116,6 +116,22 @@ func (q *Queries) SetTrophyEarned(ctx context.Context, arg SetTrophyEarnedParams
 	return err
 }
 
+const setTrophyProgress = `-- name: SetTrophyProgress :exec
+UPDATE trophies SET progress = $2, target = $3, updated_at = now() WHERE id = $1
+`
+
+type SetTrophyProgressParams struct {
+	ID       pgtype.UUID
+	Progress *int32
+	Target   *int32
+}
+
+// Progresso de troféus com contador (PSN: "87/120"); independe da definição.
+func (q *Queries) SetTrophyProgress(ctx context.Context, arg SetTrophyProgressParams) error {
+	_, err := q.db.Exec(ctx, setTrophyProgress, arg.ID, arg.Progress, arg.Target)
+	return err
+}
+
 const setTrophyRarity = `-- name: SetTrophyRarity :exec
 UPDATE trophies SET rarity_pct = $2, updated_at = now() WHERE id = $1
 `
