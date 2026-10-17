@@ -318,6 +318,60 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
 
 
+  /games/{id}/link:
+    post:
+      tags: [games]
+      operationId: linkGame
+      summary: Vincula o jogo ao mesmo título na OUTRA plataforma (Steam ↔ PSN).
+      description: >
+        Vale para todas as contas que possuem cada jogo e trava a decisão — a unificação automática
+        (match exato de título normalizado) não desfaz nem refaz vínculos manuais.
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LinkGameRequest" }
+      responses:
+        "204": { description: Vinculado }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [games]
+      operationId: unlinkGame
+      summary: Desfaz o vínculo cross-platform do jogo (decisão travada).
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      responses:
+        "204": { description: Desvinculado }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /games/{id}/link-candidates:
+    get:
+      tags: [games]
+      operationId: linkCandidates
+      summary: Jogos da OUTRA plataforma para vincular, por similaridade de título (até 10).
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+        - name: q
+          in: query
+          description: Busca por título (padrão = título do jogo).
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CrossPlatformGame" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /stats:
     get:
       tags: [insights]
@@ -807,11 +861,12 @@ components:
       allOf:
         - $ref: "#/components/schemas/Game"
         - type: object
-          required: [progress, accounts, counts]
+          required: [progress, accounts, counts, cross_platform]
           properties:
             progress: { $ref: "#/components/schemas/ProgressSummary" }
             last_unlock_at: { type: [string, "null"], format: date-time, description: "Desbloqueio mais recente (conta best)." }
             counts: { $ref: "#/components/schemas/TypeCounts" }
+            cross_platform: { type: boolean, description: "O jogo está vinculado ao mesmo título na outra plataforma." }
             accounts:
               type: array
               items: { $ref: "#/components/schemas/GameAccount" }
@@ -829,7 +884,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/Game"
         - type: object
-          required: [integration_id, account_label, progress, groups, accounts]
+          required: [integration_id, account_label, progress, groups, accounts, cross_platform, unify_locked]
           properties:
             integration_id: { type: string, format: uuid, description: "Conta desta linha do jogo." }
             account_label: { type: string }
@@ -841,6 +896,30 @@ components:
               type: array
               description: Todas as contas que possuem o jogo (mais avançada primeiro).
               items: { $ref: "#/components/schemas/GameAccount" }
+            cross_platform:
+              type: array
+              description: O mesmo jogo na outra plataforma (conta mais avançada), para ver lado a lado.
+              items: { $ref: "#/components/schemas/CrossPlatformGame" }
+            unify_locked: { type: boolean, description: "Vínculo decidido manualmente (a unificação automática não mexe)." }
+    LinkGameRequest:
+      type: object
+      required: [other_game_id]
+      properties:
+        other_game_id: { type: string, format: uuid, description: "Jogo da outra plataforma." }
+    CrossPlatformGame:
+      type: object
+      required: [game_id, platform, external_id, title, cover, hero, earned, total, completion_pct, last_unlock_at]
+      properties:
+        game_id: { type: string, format: uuid }
+        platform: { $ref: "#/components/schemas/Platform" }
+        external_id: { type: string }
+        title: { type: string }
+        cover: { type: string }
+        hero: { type: string }
+        earned: { type: integer }
+        total: { type: integer }
+        completion_pct: { type: number, description: "0–1, pelo critério da plataforma." }
+        last_unlock_at: { type: [string, "null"], format: date-time }
     TrophyGroup:
       type: object
       required: [id, external_id, name, is_base, trophies]

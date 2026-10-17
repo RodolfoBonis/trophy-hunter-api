@@ -446,6 +446,7 @@ func (s *Syncer) onRunClose(ctx context.Context, integID pgtype.UUID, scope stri
 	if !integID.Valid {
 		return // conta removida (sync_runs.integration_id ON DELETE SET NULL)
 	}
+	s.AutoLink(ctx)
 	if gamesFailed == 0 {
 		metrics.SyncRun(scope, "ok")
 		if err := s.q.MarkIntegrationSynced(ctx, dbgen.MarkIntegrationSyncedParams{
@@ -454,7 +455,9 @@ func (s *Syncer) onRunClose(ctx context.Context, integID pgtype.UUID, scope stri
 			s.logger.Error("falha ao marcar integração sincronizada", slog.String("err", err.Error()))
 			return
 		}
-		s.setStatus("steam", "connected")
+		if integ, err := s.q.GetIntegration(ctx, integID); err == nil {
+			s.setStatus(integ.Platform, "connected")
+		}
 		return
 	}
 	metrics.SyncRun(scope, "error")
@@ -650,4 +653,17 @@ func heroURL(appID int, art steam.AppAssets) string {
 		return art.Header
 	}
 	return fmt.Sprintf(heroURLFmt, appID)
+}
+
+// AutoLink liga automaticamente o mesmo jogo entre plataformas (título normalizado igual), sem
+// mexer nos vínculos que o usuário decidiu. Best-effort: falha só é logada.
+func (s *Syncer) AutoLink(ctx context.Context) {
+	n, err := s.q.AutoLinkUnified(ctx)
+	if err != nil {
+		s.logger.Warn("unificação automática falhou", slog.String("err", err.Error()))
+		return
+	}
+	if n > 0 {
+		s.logger.Info("jogos unificados entre plataformas", slog.Int64("vinculados", n))
+	}
 }

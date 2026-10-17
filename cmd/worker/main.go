@@ -95,6 +95,7 @@ func run() error {
 		PSN: psn.New(psn.Options{AuthBaseURL: cfg.PSN.AuthBaseURL, APIBaseURL: cfg.PSN.APIBaseURL, Lang: cfg.PSN.Lang, RPS: cfg.PSN.RPS, Burst: cfg.PSN.Burst, Logger: logger}),
 	})
 
+	syncer.AutoLink(ctx) // vínculos Steam × PSN existentes (ex.: após a migration de unificação)
 	worker := syncpkg.NewWorker(jobs, queries, syncer, cfg.WorkerConcurrency, cfg.Sync.JobTimeout, logger)
 
 	var wg sync.WaitGroup

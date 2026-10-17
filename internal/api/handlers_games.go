@@ -205,6 +205,22 @@ func (h *Handlers) getGame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cross := []crossPlatformDTO{}
+	if game.UnifiedGameID.Valid {
+		sibs, err := h.q.CrossPlatformSiblings(ctx, dbgen.CrossPlatformSiblingsParams{UnifiedGameID: game.UnifiedGameID, Platform: game.Platform})
+		if err != nil {
+			httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
+			return
+		}
+		for _, sb := range sibs {
+			cross = append(cross, crossPlatformDTO{
+				GameID: uuidStr(sb.ID), Platform: sb.Platform, ExternalID: sb.ExternalID, Title: sb.Title,
+				Cover: sb.Cover, Hero: sb.Hero, Earned: int(sb.Earned), Total: int(sb.Total),
+				CompletionPct: sb.CompletionPct, LastUnlockAt: tptr(sb.LastUnlockAt),
+			})
+		}
+	}
+
 	writeJSON(w, http.StatusOK, gameDetailDTO{
 		gameDTO:       toGameDTO(game),
 		IntegrationID: uuidStr(integ.ID),
@@ -212,6 +228,8 @@ func (h *Handlers) getGame(w http.ResponseWriter, r *http.Request) {
 		Progress:      summary,
 		Groups:        groupDTOs,
 		Accounts:      accountsFor(accounts[gameKey(game.Platform, game.ExternalID)], game.HasPlatinum, pgtype.UUID{}),
+		CrossPlatform: cross,
+		UnifyLocked:   game.UnifyLocked,
 	})
 }
 

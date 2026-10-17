@@ -73,7 +73,9 @@ WITH agg AS (
         COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct >= 1 AND t.rarity_pct < 5)    AS epic_earned,
         COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct >= 5 AND t.rarity_pct < 20)   AS rare_earned,
         COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct >= 20 AND t.rarity_pct < 50)  AS uncommon_earned,
-        COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct >= 50)                        AS common_earned
+        COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct >= 50)                        AS common_earned,
+        -- Também existe em outra plataforma (unificado)?
+        EXISTS (SELECT 1 FROM games o WHERE o.unified_game_id = g.unified_game_id AND o.platform <> g.platform) AS cross_platform
     FROM games g
     JOIN integrations i ON i.id = g.integration_id
     LEFT JOIN trophies t ON t.game_id = g.id

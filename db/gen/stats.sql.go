@@ -528,7 +528,7 @@ UPDATE games SET
     tags       = COALESCE($4::text[], tags),
     updated_at = now()
 WHERE id = $5
-RETURNING id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero
+RETURNING id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, unify_locked
 `
 
 type UpdateGameAnnotationsParams struct {
@@ -575,6 +575,7 @@ func (q *Queries) UpdateGameAnnotations(ctx context.Context, arg UpdateGameAnnot
 		&i.UpdatedAt,
 		&i.IntegrationID,
 		&i.Hero,
+		&i.UnifyLocked,
 	)
 	return i, err
 }

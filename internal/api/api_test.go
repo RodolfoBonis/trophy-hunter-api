@@ -70,6 +70,11 @@ func setup(t *testing.T) *testEnv {
 
 func setupWith(t *testing.T, factory syncpkg.SteamFactory) *testEnv {
 	t.Helper()
+	return setupFull(t, factory, nil)
+}
+
+func setupFull(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI) *testEnv {
+	t.Helper()
 	pool := testsupport.NewPostgres(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -83,6 +88,7 @@ func setupWith(t *testing.T, factory syncpkg.SteamFactory) *testEnv {
 	syncer := syncpkg.New(syncpkg.Deps{
 		Queries: q, Pool: pool, Queue: jobs, Cipher: cipher,
 		SteamFactory: factory,
+		PSN:          psnAPI,
 		Logger:       logger,
 	})
 

@@ -85,6 +85,9 @@ func NewRouter(d RouterDeps) http.Handler {
 		r.Get("/timeline", h.getTimeline)
 		r.Get("/alerts", h.getAlerts)
 		r.Patch("/games/{id}", h.patchGame)
+		r.Post("/games/{id}/link", h.linkGame)
+		r.Delete("/games/{id}/link", h.unlinkGame)
+		r.Get("/games/{id}/link-candidates", h.linkCandidates)
 		r.Patch("/trophies/{id}", h.patchTrophy)
 	})
 

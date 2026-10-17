@@ -155,6 +155,8 @@ type gameListItemDTO struct {
 	// LastUnlockAt é o desbloqueio mais recente da conta representada (best).
 	LastUnlockAt *time.Time       `json:"last_unlock_at"`
 	Accounts     []gameAccountDTO `json:"accounts"`
+	// CrossPlatform: o jogo também existe em outra plataforma (unificado).
+	CrossPlatform bool `json:"cross_platform"`
 }
 
 func toListItemDTO(r dbgen.ListGamesRow) gameListItemDTO {
@@ -178,7 +180,8 @@ func toListItemDTO(r dbgen.ListGamesRow) gameListItemDTO {
 		Tags:            nonNil(r.Tags),
 	}
 	return gameListItemDTO{
-		gameDTO: g,
+		gameDTO:       g,
+		CrossPlatform: r.CrossPlatform,
 		Counts: typeCountsDTO{
 			Platinum: typeCountDTO{Earned: int(r.PlatinumEarned), Total: int(r.PlatinumTotal)},
 			Gold:     typeCountDTO{Earned: int(r.GoldEarned), Total: int(r.GoldTotal)},
@@ -271,6 +274,25 @@ type gameDetailDTO struct {
 	Progress      progress.Summary `json:"progress"`
 	Groups        []trophyGroupDTO `json:"groups"`
 	Accounts      []gameAccountDTO `json:"accounts"`
+	// CrossPlatform: o mesmo jogo nas outras plataformas (lado a lado); UnifyLocked = vínculo decidido
+	// pelo usuário (a unificação automática não mexe).
+	CrossPlatform []crossPlatformDTO `json:"cross_platform"`
+	UnifyLocked   bool               `json:"unify_locked"`
+}
+
+// crossPlatformDTO ↔ components.schemas.CrossPlatformGame: a versão do jogo em outra plataforma
+// (conta mais avançada), com o progresso dela.
+type crossPlatformDTO struct {
+	GameID        string     `json:"game_id"`
+	Platform      string     `json:"platform"`
+	ExternalID    string     `json:"external_id"`
+	Title         string     `json:"title"`
+	Cover         string     `json:"cover"`
+	Hero          string     `json:"hero"`
+	Earned        int        `json:"earned"`
+	Total         int        `json:"total"`
+	CompletionPct float64    `json:"completion_pct"`
+	LastUnlockAt  *time.Time `json:"last_unlock_at"`
 }
 
 // syncRunDTO ↔ components.schemas.SyncRun

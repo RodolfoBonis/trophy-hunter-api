@@ -54,6 +54,7 @@ type Game struct {
 	UpdatedAt           pgtype.Timestamptz
 	IntegrationID       pgtype.UUID
 	Hero                string
+	UnifyLocked         bool
 }
 
 type GameProgress struct {
