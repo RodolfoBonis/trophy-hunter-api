@@ -67,12 +67,11 @@ func run() error {
 	}
 	defer pool.Close()
 
-	authenticator, err := auth.New(ctx, cfg.Auth)
-	if err != nil {
-		return err
-	}
+	// Autenticador: no modo oidc descobre o provider em background (API sobe mesmo com o Keycloak
+	// fora; readyz só fica pronto após carregar — ver auth.New).
+	authenticator := auth.New(ctx, cfg.Auth, logger)
 
-	cipher, err := crypto.New(cfg.Crypto.KeyVersion, cfg.Crypto.Key)
+	cipher, err := newCipher(cfg)
 	if err != nil {
 		return err
 	}
@@ -87,13 +86,29 @@ func run() error {
 
 	handlers := api.NewHandlers(api.HandlerDeps{
 		Queries: queries, Pool: pool, Syncer: syncer, Logger: logger,
+		AuthReady: authenticator.Ready,
 	})
 	router := api.NewRouter(api.RouterDeps{
-		Handlers: handlers, Auth: authenticator, Logger: logger, ServiceName: cfg.Telemetry.ServiceName,
+		Handlers: handlers, Auth: authenticator, Logger: logger,
+		ServiceName: cfg.Telemetry.ServiceName, WriteTimeout: cfg.HTTP.WriteTimeout,
 	})
 
 	srv := httpserver.New(cfg.HTTP, router, logger)
 	return srv.Run(ctx)
+}
+
+// newCipher constrói o cifrador com a chave primária e registra as chaves antigas (rotação).
+func newCipher(cfg config.Config) (*crypto.Cipher, error) {
+	cipher, err := crypto.New(cfg.Crypto.KeyVersion, cfg.Crypto.Key)
+	if err != nil {
+		return nil, err
+	}
+	for version, key := range cfg.Crypto.OldKeys {
+		if err := cipher.AddKey(version, key); err != nil {
+			return nil, err
+		}
+	}
+	return cipher, nil
 }
 
 // newSteamFactory devolve uma fábrica de clientes Steam (um por API key de integração).

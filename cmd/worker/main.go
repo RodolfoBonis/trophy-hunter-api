@@ -45,6 +45,9 @@ func run() error {
 	slog.SetDefault(logger)
 	logger.Info("iniciando worker", slog.String("version", trophyhunter.Version()))
 
+	// O worker é o dono do gauge integration_status (um único emissor — ver metrics / finding 23).
+	metrics.EnableIntegrationStatus()
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -66,7 +69,7 @@ func run() error {
 	}
 	defer pool.Close()
 
-	cipher, err := crypto.New(cfg.Crypto.KeyVersion, cfg.Crypto.Key)
+	cipher, err := newCipher(cfg)
 	if err != nil {
 		return err
 	}
@@ -90,7 +93,7 @@ func run() error {
 		SteamFactory: steamFactory, Logger: logger,
 	})
 
-	worker := syncpkg.NewWorker(jobs, syncer, cfg.WorkerConcurrency, logger)
+	worker := syncpkg.NewWorker(jobs, queries, syncer, cfg.WorkerConcurrency, cfg.Sync.JobTimeout, logger)
 
 	var wg sync.WaitGroup
 
@@ -122,6 +125,20 @@ func run() error {
 	<-ctx.Done()
 	wg.Wait()
 	return nil
+}
+
+// newCipher constrói o cifrador com a chave primária e registra as chaves antigas (rotação).
+func newCipher(cfg config.Config) (*crypto.Cipher, error) {
+	cipher, err := crypto.New(cfg.Crypto.KeyVersion, cfg.Crypto.Key)
+	if err != nil {
+		return nil, err
+	}
+	for version, key := range cfg.Crypto.OldKeys {
+		if err := cipher.AddKey(version, key); err != nil {
+			return nil, err
+		}
+	}
+	return cipher, nil
 }
 
 func metricsMux() http.Handler {

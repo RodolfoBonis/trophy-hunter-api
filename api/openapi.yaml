@@ -309,7 +309,9 @@ components:
         started_at: { type: string, format: date-time }
         finished_at: { type: [string, "null"], format: date-time }
         items_changed: { type: integer }
-        games_touched: { type: integer }
+        games_total: { type: integer, description: "Jogos a sincronizar no run (fan-out)." }
+        games_done: { type: integer, description: "Jogos cujo sync terminou (sucesso ou falha)." }
+        games_failed: { type: integer, description: "Jogos cujo sync falhou." }
         error: { type: string }
     ProgressSummary:
       type: object

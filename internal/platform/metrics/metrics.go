@@ -2,13 +2,22 @@
 //
 // Os coletores vivem num registry dedicado (não o default global), exposto por Handler(). As
 // funções de registro são livres de alocação no caminho quente e seguras para uso concorrente.
-// O kube-prometheus-stack do rblab descobre o alvo via ServiceMonitor.
+// O kube-prometheus-stack do rblab descobre o alvo via ServiceMonitor (API) e PodMonitor/Service
+// (worker).
+//
+// Semântica por processo (finding 23): o gauge integration_status é um estado pontual e é emitido
+// SÓ pelo worker (quem roda o sync e conhece o status). A API nunca o registra — evita duas séries
+// com os mesmos labels e valores conflitantes vindos de processos diferentes. Os counters
+// (external_api_requests_total, sync_runs_total, jobs_processed_total) podem ser emitidos por
+// ambos os processos: agregam por instância sem conflito.
 package metrics
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -35,14 +44,31 @@ var (
 	}, []string{"kind", "result"})
 
 	// integrationStatus expõe, por plataforma e status, 1 para o status atual e 0 para os demais.
+	// Registrado SÓ no worker (ver EnableIntegrationStatus).
 	integrationStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "integration_status",
 		Help: "Status atual de cada integração (1 = ativo) por plataforma e status.",
 	}, []string{"platform", "status"})
+
+	integrationStatusOnce    sync.Once
+	integrationStatusEnabled bool
 )
 
 func init() {
-	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed, integrationStatus)
+	// Coletores de runtime do Go e do processo (goroutines, GC, heap, CPU, FDs, etc.).
+	registry.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed)
+}
+
+// EnableIntegrationStatus registra e habilita o gauge integration_status. Chamado SÓ pelo worker.
+func EnableIntegrationStatus() {
+	integrationStatusOnce.Do(func() {
+		registry.MustRegister(integrationStatus)
+		integrationStatusEnabled = true
+	})
 }
 
 // ExternalAPIRequest registra uma chamada a uma API externa.
@@ -61,7 +87,11 @@ func JobProcessed(kind, result string) {
 }
 
 // SetIntegrationStatus marca o status atual de uma integração (zera os demais status da plataforma).
+// No-op quando o gauge não está habilitado (processo API) — ver EnableIntegrationStatus.
 func SetIntegrationStatus(platform, current string) {
+	if !integrationStatusEnabled {
+		return
+	}
 	for _, s := range []string{"connected", "needs_reconnect", "error_private", "error", "disabled"} {
 		v := 0.0
 		if s == current {

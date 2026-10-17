@@ -195,6 +195,9 @@ type gameDetailDTO struct {
 }
 
 // syncRunDTO ↔ components.schemas.SyncRun
+//
+// games_total/games_done/games_failed refletem o fan-out: total de jogos a sincronizar no run,
+// quantos terminaram e quantos falharam. (games_touched foi substituído por esses campos.)
 type syncRunDTO struct {
 	ID           string     `json:"id"`
 	Platform     string     `json:"platform"`
@@ -204,7 +207,9 @@ type syncRunDTO struct {
 	StartedAt    time.Time  `json:"started_at"`
 	FinishedAt   *time.Time `json:"finished_at"`
 	ItemsChanged int        `json:"items_changed"`
-	GamesTouched int        `json:"games_touched"`
+	GamesTotal   int        `json:"games_total"`
+	GamesDone    int        `json:"games_done"`
+	GamesFailed  int        `json:"games_failed"`
 	Error        string     `json:"error"`
 }
 
@@ -218,7 +223,9 @@ func toSyncRunDTO(r dbgen.SyncRun) syncRunDTO {
 		StartedAt:    r.StartedAt.Time,
 		FinishedAt:   tptr(r.FinishedAt),
 		ItemsChanged: int(r.ItemsChanged),
-		GamesTouched: int(r.GamesTouched),
+		GamesTotal:   int(r.GamesTotal),
+		GamesDone:    int(r.GamesDone),
+		GamesFailed:  int(r.GamesFailed),
 		Error:        r.Error,
 	}
 }

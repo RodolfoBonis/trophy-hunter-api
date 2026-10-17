@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -11,6 +12,7 @@ import (
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/httperr"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/progress"
+	syncpkg "github.com/RodolfoBonis/trophy-hunter-api/internal/sync"
 )
 
 var allowedSorts = map[string]bool{
@@ -44,9 +46,13 @@ func (h *Handlers) listGames(w http.ResponseWriter, r *http.Request) {
 		status = &s
 	}
 
+	// Busca: normaliza q com a MESMA normalização de normalized_title e escapa curingas de ILIKE
+	// (finding 19). Se nada sobrar após normalizar, não filtra.
 	var search *string
-	if q := qp.Get("q"); q != "" {
-		search = &q
+	if raw := strings.TrimSpace(qp.Get("q")); raw != "" {
+		if norm := syncpkg.EscapeLike(syncpkg.NormalizeTitle(raw)); norm != "" {
+			search = &norm
+		}
 	}
 
 	// has_achievements: "true" (default) | "false" | "all".

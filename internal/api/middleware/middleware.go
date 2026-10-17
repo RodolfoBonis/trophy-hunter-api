@@ -1,11 +1,13 @@
 // Package middleware reúne os middlewares HTTP transversais da borda da API: request id, recover,
-// cabeçalhos de segurança, tracing OTel, log estruturado e timeout de request.
+// cabeçalhos de segurança, tracing OTel, log estruturado, timeout de request e limite/validação de
+// corpo nas rotas de escrita.
 package middleware
 
 import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
@@ -13,6 +15,9 @@ import (
 
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/httperr"
 )
+
+// MaxBodyBytes é o teto do corpo aceito nas rotas de escrita (defesa contra payloads grandes).
+const MaxBodyBytes int64 = 64 << 10 // 64 KiB
 
 // RequestID injeta um id único por request (header X-Request-Id + contexto).
 var RequestID = middleware.RequestID
@@ -63,7 +68,30 @@ func SecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// RequestLogger registra cada request de forma estruturada (sem segredos/PII).
+// EnforceJSONBody exige Content-Type application/json nas rotas com corpo (POST/PUT/PATCH) e limita
+// o corpo a MaxBodyBytes (http.MaxBytesReader), protegendo os handlers de payloads enormes e de
+// corpos não-JSON.
+func EnforceJSONBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch:
+			if ct := r.Header.Get("Content-Type"); ct != "" {
+				mediaType := strings.TrimSpace(strings.SplitN(ct, ";", 2)[0])
+				if !strings.EqualFold(mediaType, "application/json") {
+					httperr.Write(w, r, httperr.New(httperr.KindBadRequest, "Unsupported Media Type",
+						"Content-Type deve ser application/json"))
+					return
+				}
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequestLogger registra cada request de forma estruturada (sem segredos/PII). Deve ficar POR FORA
+// do Recoverer para que panics (convertidos em 500 pelo Recoverer interno) sejam logados com o
+// status correto.
 func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -14,10 +14,24 @@ import (
 
 // RouterDeps são as dependências para montar o router.
 type RouterDeps struct {
-	Handlers    *Handlers
-	Auth        *auth.Authenticator
-	Logger      *slog.Logger
-	ServiceName string
+	Handlers     *Handlers
+	Auth         *auth.Authenticator
+	Logger       *slog.Logger
+	ServiceName  string
+	WriteTimeout time.Duration
+}
+
+// requestTimeout deriva o timeout de request do chi a partir do HTTP_WRITE_TIMEOUT do servidor:
+// fica ABAIXO dele para o handler cancelar e responder antes de o servidor matar a conexão.
+func requestTimeout(writeTimeout time.Duration) time.Duration {
+	const margin = 2 * time.Second
+	if writeTimeout <= 0 {
+		return 28 * time.Second
+	}
+	if writeTimeout <= margin {
+		return writeTimeout
+	}
+	return writeTimeout - margin
 }
 
 // NewRouter monta o chi router. /healthz, /readyz e /metrics são abertos (probes/Prometheus);
@@ -26,11 +40,13 @@ func NewRouter(d RouterDeps) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
+	// RequestLogger POR FORA do Recoverer: panics viram 500 no Recoverer interno e são logados aqui
+	// com o status correto.
+	r.Use(middleware.RequestLogger(d.Logger))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.SecurityHeaders)
 	r.Use(middleware.Tracing(d.ServiceName))
-	r.Use(middleware.RequestLogger(d.Logger))
-	r.Use(middleware.Timeout(60 * time.Second))
+	r.Use(middleware.Timeout(requestTimeout(d.WriteTimeout)))
 
 	h := d.Handlers
 
@@ -42,6 +58,7 @@ func NewRouter(d RouterDeps) http.Handler {
 	// API autenticada.
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(d.Auth.Middleware)
+		r.Use(middleware.EnforceJSONBody)
 
 		r.Get("/me", h.getMe)
 

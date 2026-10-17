@@ -50,7 +50,7 @@ func (h *Handlers) syncPlatform(w http.ResponseWriter, r *http.Request) {
 
 	job, enq, err := h.syncer.EnqueuePlatformSync(r.Context(), platform, scope, syncpkg.TriggerManual)
 	if err != nil {
-		httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
+		h.writeEnqueueError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, enqueueResp(job, enq))
@@ -74,10 +74,19 @@ func (h *Handlers) syncGame(w http.ResponseWriter, r *http.Request) {
 	}
 	job, enq, err := h.syncer.EnqueueGameSync(r.Context(), id, syncpkg.TriggerManual)
 	if err != nil {
-		httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
+		h.writeEnqueueError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, enqueueResp(job, enq))
+}
+
+// writeEnqueueError traduz erros de enfileiramento em respostas HTTP adequadas.
+func (h *Handlers) writeEnqueueError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, syncpkg.ErrNotConnected) {
+		httperr.Write(w, r, httperr.New(httperr.KindConflict, "Not connected", "integração não conectada"))
+		return
+	}
+	httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
 }
 
 // listSyncRuns devolve o log de sincronização — GET /sync-runs?platform&limit.

@@ -78,8 +78,7 @@ func setup(t *testing.T) *testEnv {
 		Logger:       logger,
 	})
 
-	authn, err := auth.New(context.Background(), config.Auth{Mode: config.AuthModeDev, RequiredRole: "trophy-hunter-user"})
-	require.NoError(t, err)
+	authn := auth.New(context.Background(), config.Auth{Mode: config.AuthModeDev, RequiredRole: "trophy-hunter-user"}, logger)
 
 	handlers := api.NewHandlers(api.HandlerDeps{Queries: q, Pool: pool, Syncer: syncer, Logger: logger})
 	router := api.NewRouter(api.RouterDeps{Handlers: handlers, Auth: authn, Logger: logger, ServiceName: "test"})
@@ -107,17 +106,21 @@ func (e *testEnv) do(t *testing.T, method, path, body string, auth bool) *http.R
 	return resp
 }
 
+// drain imita o worker: Claim → HandleJob → Complete/Fail (com lease_token).
 func (e *testEnv) drain(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 100; i++ {
 		job, err := e.queue.Claim(ctx, time.Minute)
 		require.NoError(t, err)
 		if job == nil {
 			return
 		}
-		require.NoError(t, e.sync.HandleJob(ctx, *job))
-		require.NoError(t, e.queue.Complete(ctx, job.ID))
+		if herr := e.sync.HandleJob(ctx, *job); herr != nil {
+			require.NoError(t, e.queue.Fail(ctx, job.ID, job.LeaseToken, herr))
+			continue
+		}
+		require.NoError(t, e.queue.Complete(ctx, job.ID, job.LeaseToken))
 	}
 }
 
@@ -184,7 +187,7 @@ func TestConnectSyncAndBrowse(t *testing.T) {
 
 	// GET /games/{id} detalhe.
 	rd := e.do(t, http.MethodGet, "/api/v1/games/"+page.Items[0].ID, "", true)
-	db, _ := io.ReadAll(rd.Body)
+	dbody, _ := io.ReadAll(rd.Body)
 	_ = rd.Body.Close()
 	require.Equal(t, http.StatusOK, rd.StatusCode)
 
@@ -205,7 +208,7 @@ func TestConnectSyncAndBrowse(t *testing.T) {
 			} `json:"trophies"`
 		} `json:"groups"`
 	}
-	require.NoError(t, json.Unmarshal(db, &detail))
+	require.NoError(t, json.Unmarshal(dbody, &detail))
 	require.Equal(t, "in_progress", detail.Progress.Status)
 	require.Len(t, detail.Groups, 1)
 	require.True(t, detail.Groups[0].IsBase)
@@ -219,6 +222,7 @@ func TestConnectSyncAndBrowse(t *testing.T) {
 	require.Equal(t, http.StatusOK, rs.StatusCode)
 	require.Contains(t, string(sb), `"scope":"full"`)
 	require.Contains(t, string(sb), `"status":"ok"`)
+	require.Contains(t, string(sb), `"games_total":1`)
 }
 
 func TestGetUnknownGame404(t *testing.T) {
