@@ -96,6 +96,10 @@ func NewRouter(d RouterDeps) http.Handler {
 			r.Get("/games/{id}/link-candidates", h.linkCandidates)
 			r.Patch("/trophies/{id}", h.patchTrophy)
 
+			// Avisos de troféu desbloqueado (toast/cerimônia).
+			r.Get("/events/unseen", h.listUnseenUnlocks)
+			r.Post("/events/seen", h.markUnlocksSeen)
+
 			// IA: guias, roadmap e chat (geração assíncrona; resposta em /ai/streams/{id}).
 			r.Get("/trophies/{id}/guide", h.getTrophyGuide)
 			r.Post("/trophies/{id}/guide", h.generateTrophyGuide)

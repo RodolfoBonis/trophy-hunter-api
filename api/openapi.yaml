@@ -636,6 +636,43 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
+  /events/unseen:
+    get:
+      tags: [games]
+      operationId: listUnseenUnlocks
+      summary: Troféus desbloqueados ainda não exibidos (avisos/cerimônia), mais antigos primeiro (até 100).
+      description: >
+        Só desbloqueios detectados DEPOIS do sync inicial de cada conta. completes_game = o troféu
+        fechou o jogo (PSN: platina; Steam: 100%).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/UnlockEvent" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /events/seen:
+    post:
+      tags: [games]
+      operationId: markUnlocksSeen
+      summary: Marca avisos como exibidos.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids: { type: array, minItems: 1, maxItems: 500, items: { type: string, format: uuid } }
+      responses:
+        "204": { description: Marcados }
+        "401": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -660,6 +697,26 @@ components:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
   schemas:
+    UnlockEvent:
+      type: object
+      required: [id, detected_at, trophy_id, name, description, type, icon, rarity_pct, earned_at, game_id, game_title, platform, external_id, cover, hero, completes_game]
+      properties:
+        id: { type: string, format: uuid }
+        detected_at: { type: [string, "null"], format: date-time }
+        trophy_id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        type: { $ref: "#/components/schemas/TrophyType" }
+        icon: { type: string }
+        rarity_pct: { type: [number, "null"] }
+        earned_at: { type: [string, "null"], format: date-time }
+        game_id: { type: string, format: uuid }
+        game_title: { type: string }
+        platform: { $ref: "#/components/schemas/Platform" }
+        external_id: { type: string }
+        cover: { type: string }
+        hero: { type: string }
+        completes_game: { type: boolean, description: "Fechou o jogo (platina/100%) → cerimônia." }
     AIGuideEnvelope:
       type: object
       required: [guide]
