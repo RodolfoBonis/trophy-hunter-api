@@ -1,0 +1,4 @@
+{"response":{"total_count":2,"games":[
+{"appid":359550,"name":"Tom Clancy's Rainbow Six Siege","playtime_2weeks":1426,"playtime_forever":98012,"img_icon_url":"abc","playtime_windows_forever":98012},
+{"appid":1501750,"name":"Lords of the Fallen","playtime_2weeks":120,"playtime_forever":120,"img_icon_url":"def","playtime_windows_forever":120}
+]}}

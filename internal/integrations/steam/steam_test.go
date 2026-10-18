@@ -50,6 +50,18 @@ func TestGetOwnedGames(t *testing.T) {
 	require.False(t, games[1].HasCommunityVisibleStats)
 }
 
+func TestGetRecentlyPlayedGames(t *testing.T) {
+	c := newClient(t, serveFixture(t, "recently_played.json"))
+	games, err := c.GetRecentlyPlayedGames(context.Background(), "76561197960000000")
+	require.NoError(t, err)
+	require.Len(t, games, 2)
+	require.Equal(t, 1501750, games[1].AppID)
+	require.Equal(t, "Lords of the Fallen", games[1].Name)
+	require.Equal(t, 120, games[1].PlaytimeForever)
+	require.True(t, games[1].HasCommunityVisibleStats, "desconhecido na API: o sync do jogo descobre")
+	require.Zero(t, games[1].RtimeLastPlayed)
+}
+
 func TestGetPlayerAchievements(t *testing.T) {
 	c := newClient(t, serveFixture(t, "player_achievements.json"))
 	achs, err := c.GetPlayerAchievements(context.Background(), "steamid", 620)

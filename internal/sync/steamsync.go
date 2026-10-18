@@ -68,8 +68,10 @@ func (s *Syncer) handlePlatform(ctx context.Context, p PlatformPayload) error {
 		s.failPlatform(ctx, runID, integID, err)
 		return queue.Permanent(err) // o cliente já retentou 429/5xx; não rodar retry de job em cima
 	}
+	ownedCount := len(owned)
+	owned = s.withRecentlyPlayed(ctx, client, creds.SteamID, owned)
 
-	if len(owned) == 0 {
+	if ownedCount == 0 {
 		// Perfil privado devolve {"response":{}} → biblioteca "vazia". Confirme a visibilidade antes
 		// de concluir, para não marcar initial_sync_done nem voltar a status connected (finding 6).
 		summary, serr := client.GetPlayerSummary(ctx, creds.SteamID)
@@ -99,6 +101,12 @@ func (s *Syncer) handlePlatform(ctx context.Context, p PlatformPayload) error {
 			s.failPlatform(ctx, runID, integID, priorErr)
 			return queue.Permanent(fmt.Errorf("carregar jogo: %w", priorErr))
 		}
+		// Jogo emprestado: a API não traz rtime; a mudança no tempo de jogo decide se refaz.
+		borrowedChanged := false
+		if og.NotOwned {
+			borrowedChanged = isNew || int(prior.PlaytimeMinutes) != og.PlaytimeForever
+			og.RtimeLastPlayed = notOwnedRtime(prior, isNew, og, time.Now())
+		}
 
 		gameRow, uerr := s.upsertGameIdentity(ctx, integID, og, assets[og.AppID])
 		if uerr != nil {
@@ -116,7 +124,7 @@ func (s *Syncer) handlePlatform(ctx context.Context, p PlatformPayload) error {
 			continue
 		}
 
-		need := p.Scope == ScopeFull || isNew || remoteChanged(prior, og)
+		need := p.Scope == ScopeFull || isNew || borrowedChanged || remoteChanged(prior, og)
 		if !need {
 			continue
 		}
@@ -195,12 +203,21 @@ func (s *Syncer) handleGame(ctx context.Context, job queue.Job, p GamePayload) e
 		if oerr != nil {
 			return s.gameTransient(ctx, job, runID, integID, oerr)
 		}
+		owned = s.withRecentlyPlayed(ctx, client, creds.SteamID, owned)
 		found := false
 		for _, og := range owned {
 			if og.AppID == appID {
 				rtime, hasStats, found = og.RtimeLastPlayed, og.HasCommunityVisibleStats, true
+				if og.NotOwned {
+					rtime = time.Now().Unix() // sync manual: sempre refaz
+				}
 				break
 			}
+		}
+		if !found && game.HasAchievements {
+			// Jogo emprestado que saiu de "jogados recentemente": continua acessível pelas
+			// conquistas do jogador — refaz mesmo assim (sem marca d'água remota).
+			rtime, hasStats, found = time.Now().Unix(), true, true
 		}
 		if !found {
 			s.finalizeChild(ctx, runID, false, 0) // não está mais na biblioteca
@@ -669,4 +686,37 @@ func (s *Syncer) AutoLink(ctx context.Context) {
 	if n > 0 {
 		s.logger.Info("jogos unificados entre plataformas", slog.Int64("vinculados", n))
 	}
+}
+
+// withRecentlyPlayed junta à biblioteca os jogos de "jogados recentemente" que a conta NÃO possui
+// (Família Steam/empréstimo, fim de semana gratuito): o GetOwnedGames os omite, mas as conquistas
+// ganhas neles contam no perfil. Falha aqui não derruba o sync (só perde os emprestados nesta rodada).
+func (s *Syncer) withRecentlyPlayed(ctx context.Context, client SteamAPI, steamID string, owned []steam.OwnedGame) []steam.OwnedGame {
+	recent, err := client.GetRecentlyPlayedGames(ctx, steamID)
+	if err != nil {
+		s.logger.Warn("steam: jogados recentemente indisponível", slog.String("err", err.Error()))
+		return owned
+	}
+	have := make(map[int]bool, len(owned))
+	for _, og := range owned {
+		have[og.AppID] = true
+	}
+	for _, rg := range recent {
+		if have[rg.AppID] {
+			continue
+		}
+		rg.NotOwned = true
+		owned = append(owned, rg)
+	}
+	return owned
+}
+
+// notOwnedRtime sintetiza a marca d'água de um jogo emprestado (a API de recentes não traz
+// rtime_last_played): novo ou com tempo de jogo diferente do salvo → "agora" (refaz o jogo);
+// sem mudança → a marca anterior (o incremental pula).
+func notOwnedRtime(prior dbgen.Game, isNew bool, og steam.OwnedGame, now time.Time) int64 {
+	if isNew || int(prior.PlaytimeMinutes) != og.PlaytimeForever || !prior.RemoteUpdatedAt.Valid {
+		return now.Unix()
+	}
+	return prior.RemoteUpdatedAt.Time.Unix()
 }

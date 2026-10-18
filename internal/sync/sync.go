@@ -69,6 +69,7 @@ var ErrNotConnected = errors.New("integração não conectada")
 // SteamAPI é a superfície do cliente Steam usada pelo syncer (mockável em testes).
 type SteamAPI interface {
 	GetOwnedGames(ctx context.Context, steamID string) ([]steam.OwnedGame, error)
+	GetRecentlyPlayedGames(ctx context.Context, steamID string) ([]steam.OwnedGame, error)
 	GetPlayerAchievements(ctx context.Context, steamID string, appID int) ([]steam.PlayerAchievement, error)
 	GetSchemaForGame(ctx context.Context, appID int) (string, []steam.SchemaAchievement, error)
 	GetGlobalAchievementPercentages(ctx context.Context, appID int) (map[string]float64, error)

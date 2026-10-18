@@ -14,6 +14,9 @@ type OwnedGame struct {
 	RtimeLastPlayed          int64 // unix seconds (0 = nunca)
 	ImgIconURL               string
 	HasCommunityVisibleStats bool
+	// NotOwned: o jogo veio de "jogados recentemente", não da biblioteca (Família Steam/empréstimo,
+	// fim de semana gratuito). Sem rtime_last_played nem has_community_visible_stats na API.
+	NotOwned bool
 }
 
 // PlayerAchievement é o estado de uma conquista para o jogador (GetPlayerAchievements).
@@ -46,6 +49,17 @@ type PlayerSummary struct {
 func (p PlayerSummary) IsPublic() bool { return p.CommunityVisibleState == 3 }
 
 // --- respostas cruas da API ---
+
+type recentGamesResp struct {
+	Response struct {
+		Games []struct {
+			AppID           int    `json:"appid"`
+			Name            string `json:"name"`
+			PlaytimeForever int    `json:"playtime_forever"`
+			ImgIconURL      string `json:"img_icon_url"`
+		} `json:"games"`
+	} `json:"response"`
+}
 
 type ownedGamesResp struct {
 	Response struct {

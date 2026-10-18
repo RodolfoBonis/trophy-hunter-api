@@ -24,6 +24,8 @@ import (
 type fakeSteam struct {
 	summary      steam.PlayerSummary
 	owned        []steam.OwnedGame
+	recent       []steam.OwnedGame // "jogados recentemente" (inclui jogos emprestados)
+	recentErr    error
 	schema       map[int][]steam.SchemaAchievement
 	achievements map[int][]steam.PlayerAchievement
 	percentages  map[int]map[string]float64
@@ -38,6 +40,9 @@ func (f *fakeSteam) GetAppAssets(context.Context, []int) (map[int]steam.AppAsset
 
 func (f *fakeSteam) GetOwnedGames(context.Context, string) ([]steam.OwnedGame, error) {
 	return f.owned, nil
+}
+func (f *fakeSteam) GetRecentlyPlayedGames(context.Context, string) ([]steam.OwnedGame, error) {
+	return f.recent, f.recentErr
 }
 func (f *fakeSteam) GetPlayerAchievements(_ context.Context, _ string, appID int) ([]steam.PlayerAchievement, error) {
 	if err := f.achErr[appID]; err != nil {
@@ -374,4 +379,61 @@ func TestCoverUsesStoreAssets(t *testing.T) {
 			require.Equal(t, tc.want, game.Cover)
 		})
 	}
+}
+
+// TestBorrowedGameFromRecentlyPlayed: um jogo emprestado (Família Steam) não vem no GetOwnedGames, só
+// em "jogados recentemente". Ele entra na biblioteca com as conquistas; o incremental só o refaz
+// quando o tempo de jogo muda (a API de recentes não traz rtime_last_played).
+func TestBorrowedGameFromRecentlyPlayed(t *testing.T) {
+	pool := testsupport.NewPostgres(t)
+	ctx := context.Background()
+	q := dbgen.New(pool)
+	jobs := queue.NewPostgres(pool, queue.DefaultBackoff)
+	fake := newFake()
+	const lotf = 1501750
+	fake.recent = []steam.OwnedGame{
+		{AppID: 620, Name: "Portal 2™", PlaytimeForever: 745, HasCommunityVisibleStats: true}, // já possuído: ignora
+		{AppID: lotf, Name: "Lords of the Fallen", PlaytimeForever: 120, HasCommunityVisibleStats: true},
+	}
+	fake.schema[lotf] = []steam.SchemaAchievement{{Name: "BOSS", DisplayName: "Primeiro chefe"}, {Name: "END", DisplayName: "Final"}}
+	fake.achievements[lotf] = []steam.PlayerAchievement{{APIName: "BOSS", Achieved: true, UnlockTime: 1760000000}, {APIName: "END"}}
+	fake.percentages[lotf] = map[string]float64{"BOSS": 40, "END": 9}
+	syncer := newSyncer(t, pool, q, jobs, fake)
+
+	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "K", IDOrVanity: "76561197960000000"})
+	require.NoError(t, err)
+	processAll(t, jobs, syncer)
+
+	game, err := q.GetGameByExternal(ctx, dbgen.GetGameByExternalParams{IntegrationID: integ.ID, ExternalID: "1501750"})
+	require.NoError(t, err, "o jogo emprestado entrou na biblioteca")
+	require.Equal(t, "Lords of the Fallen", game.Title)
+	require.True(t, game.HasAchievements)
+	trophies, err := q.ListTrophiesByGame(ctx, game.ID)
+	require.NoError(t, err)
+	require.Len(t, trophies, 2)
+	var nGames int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM games WHERE integration_id = $1", integ.ID).Scan(&nGames))
+	require.Equal(t, 2, nGames, "Portal 2 não duplica por estar nos dois")
+
+	// Incremental sem jogar: não refaz o emprestado.
+	_, _, err = syncer.EnqueuePlatformSync(ctx, integ.ID, syncpkg.ScopeIncremental, syncpkg.TriggerManual)
+	require.NoError(t, err)
+	processAll(t, jobs, syncer)
+	require.Equal(t, int32(0), latestRun(t, q).GamesTotal)
+
+	// Jogou mais e pegou a conquista final: refaz e gera o aviso.
+	fake.recent[1].PlaytimeForever = 300
+	fake.achievements[lotf] = []steam.PlayerAchievement{{APIName: "BOSS", Achieved: true, UnlockTime: 1760000000}, {APIName: "END", Achieved: true, UnlockTime: 1760100000}}
+	_, _, err = syncer.EnqueuePlatformSync(ctx, integ.ID, syncpkg.ScopeIncremental, syncpkg.TriggerManual)
+	require.NoError(t, err)
+	processAll(t, jobs, syncer)
+	require.Equal(t, int32(1), latestRun(t, q).GamesTotal)
+	require.Equal(t, 1, countUnlockEvents(t, pool))
+
+	// "Jogados recentemente" fora do ar: o sync segue só com a biblioteca própria.
+	fake.recentErr = errors.New("503")
+	_, _, err = syncer.EnqueuePlatformSync(ctx, integ.ID, syncpkg.ScopeIncremental, syncpkg.TriggerManual)
+	require.NoError(t, err)
+	processAll(t, jobs, syncer)
+	require.Equal(t, "ok", latestRun(t, q).Status)
 }

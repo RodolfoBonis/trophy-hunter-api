@@ -35,6 +35,29 @@ func (c *Client) GetOwnedGames(ctx context.Context, steamID string) ([]OwnedGame
 	return games, nil
 }
 
+// GetRecentlyPlayedGames lista os jogos jogados nas últimas 2 semanas — inclusive os que a conta NÃO
+// possui (Família Steam/empréstimo, fim de semana gratuito), que o GetOwnedGames omite. Sem
+// rtime_last_played; has_community_visible_stats é desconhecido (o sync do jogo descobre).
+func (c *Client) GetRecentlyPlayedGames(ctx context.Context, steamID string) ([]OwnedGame, error) {
+	q := url.Values{}
+	q.Set("key", c.apiKey)
+	q.Set("steamid", steamID)
+	q.Set("format", "json")
+
+	var raw recentGamesResp
+	if err := c.doJSON(ctx, "GetRecentlyPlayedGames", "/IPlayerService/GetRecentlyPlayedGames/v1/", q, &raw); err != nil {
+		return nil, err
+	}
+	games := make([]OwnedGame, 0, len(raw.Response.Games))
+	for _, g := range raw.Response.Games {
+		games = append(games, OwnedGame{
+			AppID: g.AppID, Name: g.Name, PlaytimeForever: g.PlaytimeForever, ImgIconURL: g.ImgIconURL,
+			HasCommunityVisibleStats: true,
+		})
+	}
+	return games, nil
+}
+
 // GetPlayerAchievements devolve o estado das conquistas do jogador para um app.
 // Mapeia os erros de domínio (perfil privado, sem stats) a partir do campo error da resposta.
 func (c *Client) GetPlayerAchievements(ctx context.Context, steamID string, appID int) ([]PlayerAchievement, error) {

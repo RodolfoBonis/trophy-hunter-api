@@ -52,6 +52,9 @@ var accountAch = map[string]map[int][]steam.PlayerAchievement{
 func (f accountFake) GetOwnedGames(_ context.Context, id string) ([]steam.OwnedGame, error) {
 	return accountLibs[id], nil
 }
+func (f accountFake) GetRecentlyPlayedGames(context.Context, string) ([]steam.OwnedGame, error) {
+	return nil, nil
+}
 func (f accountFake) GetPlayerAchievements(_ context.Context, id string, appID int) ([]steam.PlayerAchievement, error) {
 	return accountAch[id][appID], nil
 }

@@ -32,6 +32,9 @@ type fakeSteam struct{}
 func (fakeSteam) GetOwnedGames(context.Context, string) ([]steam.OwnedGame, error) {
 	return []steam.OwnedGame{{AppID: 620, Name: "Portal 2", PlaytimeForever: 745, RtimeLastPlayed: 1700000000, HasCommunityVisibleStats: true}}, nil
 }
+func (fakeSteam) GetRecentlyPlayedGames(context.Context, string) ([]steam.OwnedGame, error) {
+	return nil, nil
+}
 func (fakeSteam) GetPlayerAchievements(context.Context, string, int) ([]steam.PlayerAchievement, error) {
 	return []steam.PlayerAchievement{
 		{APIName: "ACH_WIN_GAME", Achieved: true, UnlockTime: 1700000500},
