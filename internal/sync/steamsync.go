@@ -702,7 +702,7 @@ func (s *Syncer) withRecentlyPlayed(ctx context.Context, client SteamAPI, steamI
 		have[og.AppID] = true
 	}
 	for _, rg := range recent {
-		if have[rg.AppID] {
+		if have[rg.AppID] || rg.AppID == spacewarAppID {
 			continue
 		}
 		rg.NotOwned = true
@@ -710,6 +710,10 @@ func (s *Syncer) withRecentlyPlayed(ctx context.Context, client SteamAPI, steamI
 	}
 	return owned
 }
+
+// spacewarAppID é o app de teste da Valve (usado por builds de desenvolvimento e mods): aparece em
+// "jogados recentemente", mas não é um jogo.
+const spacewarAppID = 480
 
 // notOwnedRtime sintetiza a marca d'água de um jogo emprestado (a API de recentes não traz
 // rtime_last_played): novo ou com tempo de jogo diferente do salvo → "agora" (refaz o jogo);

@@ -394,6 +394,7 @@ func TestBorrowedGameFromRecentlyPlayed(t *testing.T) {
 	fake.recent = []steam.OwnedGame{
 		{AppID: 620, Name: "Portal 2™", PlaytimeForever: 745, HasCommunityVisibleStats: true}, // já possuído: ignora
 		{AppID: lotf, Name: "Lords of the Fallen", PlaytimeForever: 120, HasCommunityVisibleStats: true},
+		{AppID: 480, Name: "Spacewar", PlaytimeForever: 7, HasCommunityVisibleStats: true}, // app de teste da Valve: ignora
 	}
 	fake.schema[lotf] = []steam.SchemaAchievement{{Name: "BOSS", DisplayName: "Primeiro chefe"}, {Name: "END", DisplayName: "Final"}}
 	fake.achievements[lotf] = []steam.PlayerAchievement{{APIName: "BOSS", Achieved: true, UnlockTime: 1760000000}, {APIName: "END"}}
