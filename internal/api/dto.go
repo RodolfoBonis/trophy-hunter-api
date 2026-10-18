@@ -7,13 +7,6 @@ import (
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/progress"
 )
 
-// userDTO ↔ components.schemas.User
-type userDTO struct {
-	Subject string `json:"subject"`
-	Email   string `json:"email,omitempty"`
-	Name    string `json:"name,omitempty"`
-}
-
 // integrationDTO ↔ components.schemas.Integration. NUNCA inclui credenciais.
 type integrationDTO struct {
 	ID           string     `json:"id"`

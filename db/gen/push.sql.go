@@ -17,7 +17,7 @@ SET notified_status = $1, notified_at = now()
 WHERE id = $2
   AND notified_status <> $1
   AND ($1 = 'needs_reconnect' OR notified_at IS NULL OR notified_at < now() - interval '6 hours')
-RETURNING id, platform, label, display_name
+RETURNING id, user_id, platform, label, display_name
 `
 
 type ClaimStatusNotificationParams struct {
@@ -27,6 +27,7 @@ type ClaimStatusNotificationParams struct {
 
 type ClaimStatusNotificationRow struct {
 	ID          pgtype.UUID
+	UserID      pgtype.UUID
 	Platform    string
 	Label       string
 	DisplayName string
@@ -40,6 +41,7 @@ func (q *Queries) ClaimStatusNotification(ctx context.Context, arg ClaimStatusNo
 	var i ClaimStatusNotificationRow
 	err := row.Scan(
 		&i.ID,
+		&i.UserID,
 		&i.Platform,
 		&i.Label,
 		&i.DisplayName,
@@ -48,11 +50,11 @@ func (q *Queries) ClaimStatusNotification(ctx context.Context, arg ClaimStatusNo
 }
 
 const countPushSubscriptions = `-- name: CountPushSubscriptions :one
-SELECT count(*) FROM push_subscriptions
+SELECT count(*) FROM push_subscriptions WHERE user_id = $1
 `
 
-func (q *Queries) CountPushSubscriptions(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, countPushSubscriptions)
+func (q *Queries) CountPushSubscriptions(ctx context.Context, userID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countPushSubscriptions, userID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -68,11 +70,16 @@ func (q *Queries) DeletePushSubscription(ctx context.Context, id pgtype.UUID) er
 }
 
 const deletePushSubscriptionByEndpoint = `-- name: DeletePushSubscriptionByEndpoint :execrows
-DELETE FROM push_subscriptions WHERE endpoint = $1
+DELETE FROM push_subscriptions WHERE endpoint = $1 AND user_id = $2
 `
 
-func (q *Queries) DeletePushSubscriptionByEndpoint(ctx context.Context, endpoint string) (int64, error) {
-	result, err := q.db.Exec(ctx, deletePushSubscriptionByEndpoint, endpoint)
+type DeletePushSubscriptionByEndpointParams struct {
+	Endpoint string
+	UserID   pgtype.UUID
+}
+
+func (q *Queries) DeletePushSubscriptionByEndpoint(ctx context.Context, arg DeletePushSubscriptionByEndpointParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePushSubscriptionByEndpoint, arg.Endpoint, arg.UserID)
 	if err != nil {
 		return 0, err
 	}
@@ -80,11 +87,11 @@ func (q *Queries) DeletePushSubscriptionByEndpoint(ctx context.Context, endpoint
 }
 
 const listPushSubscriptions = `-- name: ListPushSubscriptions :many
-SELECT id, endpoint, p256dh, auth, user_agent, failures, last_success_at, created_at, updated_at FROM push_subscriptions ORDER BY created_at
+SELECT id, endpoint, p256dh, auth, user_agent, failures, last_success_at, created_at, updated_at, user_id FROM push_subscriptions WHERE user_id = $1 ORDER BY created_at
 `
 
-func (q *Queries) ListPushSubscriptions(ctx context.Context) ([]PushSubscription, error) {
-	rows, err := q.db.Query(ctx, listPushSubscriptions)
+func (q *Queries) ListPushSubscriptions(ctx context.Context, userID pgtype.UUID) ([]PushSubscription, error) {
+	rows, err := q.db.Query(ctx, listPushSubscriptions, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +109,7 @@ func (q *Queries) ListPushSubscriptions(ctx context.Context) ([]PushSubscription
 			&i.LastSuccessAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.UserID,
 		); err != nil {
 			return nil, err
 		}
@@ -114,7 +122,7 @@ func (q *Queries) ListPushSubscriptions(ctx context.Context) ([]PushSubscription
 }
 
 const listUnpushedUnlocks = `-- name: ListUnpushedUnlocks :many
-SELECT e.id, t.name AS trophy_name, t.type AS trophy_type,
+SELECT e.id, g.user_id, t.name AS trophy_name, t.type AS trophy_type,
        g.id AS game_id, g.title AS game_title, g.platform,
        (CASE WHEN g.platform = 'psn' THEN t.type = 'platinum'
              ELSE NOT EXISTS (SELECT 1 FROM trophies o WHERE o.game_id = g.id AND NOT o.earned) END)::boolean AS completes_game
@@ -128,6 +136,7 @@ LIMIT 200
 
 type ListUnpushedUnlocksRow struct {
 	ID            pgtype.UUID
+	UserID        pgtype.UUID
 	TrophyName    string
 	TrophyType    string
 	GameID        pgtype.UUID
@@ -148,6 +157,7 @@ func (q *Queries) ListUnpushedUnlocks(ctx context.Context) ([]ListUnpushedUnlock
 		var i ListUnpushedUnlocksRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.UserID,
 			&i.TrophyName,
 			&i.TrophyType,
 			&i.GameID,
@@ -206,11 +216,12 @@ func (q *Queries) MarkUnlocksPushed(ctx context.Context, ids []pgtype.UUID) erro
 
 const upsertPushSubscription = `-- name: UpsertPushSubscription :one
 
-INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_agent)
-VALUES ($1, $2, $3, $4)
+INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_agent, user_id)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (endpoint) DO UPDATE
-SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, user_agent = EXCLUDED.user_agent, failures = 0, updated_at = now()
-RETURNING id, endpoint, p256dh, auth, user_agent, failures, last_success_at, created_at, updated_at
+SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, user_agent = EXCLUDED.user_agent,
+    user_id = EXCLUDED.user_id, failures = 0, updated_at = now()
+RETURNING id, endpoint, p256dh, auth, user_agent, failures, last_success_at, created_at, updated_at, user_id
 `
 
 type UpsertPushSubscriptionParams struct {
@@ -218,15 +229,18 @@ type UpsertPushSubscriptionParams struct {
 	P256dh    string
 	Auth      string
 	UserAgent string
+	UserID    pgtype.UUID
 }
 
 // Web push: inscrições, avisos de desbloqueio ainda não enviados e anti-spam dos alertas de conta.
+// Um navegador pertence a quem se inscreveu por último nele (aparelho compartilhado troca de dono).
 func (q *Queries) UpsertPushSubscription(ctx context.Context, arg UpsertPushSubscriptionParams) (PushSubscription, error) {
 	row := q.db.QueryRow(ctx, upsertPushSubscription,
 		arg.Endpoint,
 		arg.P256dh,
 		arg.Auth,
 		arg.UserAgent,
+		arg.UserID,
 	)
 	var i PushSubscription
 	err := row.Scan(
@@ -239,6 +253,7 @@ func (q *Queries) UpsertPushSubscription(ctx context.Context, arg UpsertPushSubs
 		&i.LastSuccessAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserID,
 	)
 	return i, err
 }

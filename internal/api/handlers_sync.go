@@ -57,7 +57,7 @@ func (h *Handlers) syncGame(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, r, httperr.New(httperr.KindBadRequest, "Bad request", "id inválido"))
 		return
 	}
-	if _, err := h.q.GetGameByID(r.Context(), gameUUID); err != nil {
+	if _, err := h.q.GetGameForUser(r.Context(), dbgen.GetGameForUserParams{ID: gameUUID, UserID: currentUser(r).ID}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			httperr.Write(w, r, httperr.New(httperr.KindNotFound, "Not found", "jogo não encontrado"))
 			return
@@ -109,7 +109,7 @@ func (h *Handlers) listSyncRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	limit = clamp(limit, 1, 200)
 
-	runs, err := h.q.ListSyncRuns(r.Context(), dbgen.ListSyncRunsParams{Limit: int32(limit), Platform: platform, IntegrationID: integrationID}) //nolint:gosec // limit clamped
+	runs, err := h.q.ListSyncRuns(r.Context(), dbgen.ListSyncRunsParams{UserID: currentUser(r).ID, Limit: int32(limit), Platform: platform, IntegrationID: integrationID}) //nolint:gosec // limit clamped
 	if err != nil {
 		httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
 		return

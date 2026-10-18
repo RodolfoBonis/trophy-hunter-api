@@ -21,10 +21,12 @@ var ErrAPIKeyRequired = errors.New("api key obrigatória")
 
 // ConnectSteamParams descreve uma nova conta Steam.
 type ConnectSteamParams struct {
+	// UserID: dono da conta no app.
+	UserID pgtype.UUID
 	// Label é o apelido da conta no app (ex.: "Principal", "Alt"). Vazio → persona da Steam.
 	Label string
-	// APIKey é opcional quando já existe outra conta Steam: a Steam Web API key lê QUALQUER perfil
-	// público, então a key da conta existente é reaproveitada.
+	// APIKey é opcional: sem ela usa a key de outra conta Steam da MESMA pessoa ou, na falta, a
+	// key do servidor (STEAM_SERVER_API_KEY) — a Steam Web API key lê QUALQUER perfil público.
 	APIKey     string
 	IDOrVanity string
 }
@@ -37,12 +39,16 @@ type ConnectSteamParams struct {
 // conectada, para o usuário corrigir a privacidade sem reconfigurar a chave.
 func (s *Syncer) ConnectSteam(ctx context.Context, p ConnectSteamParams) (dbgen.Integration, error) {
 	apiKey := strings.TrimSpace(p.APIKey)
+	storedKey := apiKey // "" = usa a key do servidor em tempo de execução (rotação sem reconectar)
 	if apiKey == "" {
-		reused, err := s.reusableSteamKey(ctx)
+		reused, err := s.reusableSteamKey(ctx, p.UserID)
 		if err != nil {
 			return dbgen.Integration{}, err
 		}
-		apiKey = reused
+		apiKey, storedKey = reused, reused
+		if reused == "" {
+			apiKey = s.steamServerKey
+		}
 	}
 	client := s.steamFactory(apiKey)
 
@@ -64,7 +70,7 @@ func (s *Syncer) ConnectSteam(ctx context.Context, p ConnectSteamParams) (dbgen.
 		return dbgen.Integration{}, err // ErrInvalidKey/ErrProfilePrivate tratados pelo handler
 	}
 
-	blob, err := s.encryptSteam(steamCredentials{APIKey: apiKey, SteamID: steamID})
+	blob, err := s.encryptSteam(steamCredentials{APIKey: storedKey, SteamID: steamID})
 	if err != nil {
 		return dbgen.Integration{}, err
 	}
@@ -81,6 +87,7 @@ func (s *Syncer) ConnectSteam(ctx context.Context, p ConnectSteamParams) (dbgen.
 		Avatar:         summary.AvatarFull,
 		CredentialsEnc: blob,
 		KeyVersion:     int32(s.cipher.Version()), //nolint:gosec // versão pequena e não-negativa
+		UserID:         p.UserID,
 	})
 	if err != nil {
 		if isUniqueViolation(err) { // corrida entre dois connects da mesma conta
@@ -129,20 +136,23 @@ func (s *Syncer) UpdateSteamKey(ctx context.Context, integrationID pgtype.UUID, 
 	})
 }
 
-// reusableSteamKey devolve a API key da conta Steam mais antiga (ErrAPIKeyRequired se não houver).
-func (s *Syncer) reusableSteamKey(ctx context.Context) (string, error) {
-	integs, err := s.q.ListIntegrationsByPlatform(ctx, "steam")
+// reusableSteamKey devolve a API key própria de outra conta Steam da MESMA pessoa; "" quando ela
+// não tem (vale a key do servidor); ErrAPIKeyRequired se nem o servidor tem key.
+func (s *Syncer) reusableSteamKey(ctx context.Context, userID pgtype.UUID) (string, error) {
+	integs, err := s.q.ListIntegrationsByPlatformForUser(ctx, dbgen.ListIntegrationsByPlatformForUserParams{Platform: "steam", UserID: userID})
 	if err != nil {
 		return "", fmt.Errorf("listar contas steam: %w", err)
 	}
-	if len(integs) == 0 {
+	for _, integ := range integs {
+		_, creds, err := s.steamCreds(integ)
+		if err == nil && creds.APIKey != "" {
+			return creds.APIKey, nil
+		}
+	}
+	if s.steamServerKey == "" {
 		return "", ErrAPIKeyRequired
 	}
-	_, _, creds, err := s.loadSteam(ctx, integs[0].ID)
-	if err != nil {
-		return "", err
-	}
-	return creds.APIKey, nil
+	return "", nil
 }
 
 func (s *Syncer) encryptSteam(creds steamCredentials) ([]byte, error) {

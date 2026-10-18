@@ -1,6 +1,8 @@
 package sync
 
 import (
+	"strings"
+
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
 
 	"context"
@@ -215,7 +217,7 @@ func (w *Worker) stateOnce(ctx context.Context) {
 		w.logger.Warn("métricas: contar fila falhou", slog.String("err", err.Error()))
 		return
 	}
-	integs, err := w.queries.ListIntegrations(ctx)
+	integs, err := w.queries.ListAccountsForMetrics(ctx)
 	if err != nil {
 		w.logger.Warn("métricas: listar contas falhou", slog.String("err", err.Error()))
 		return
@@ -226,11 +228,24 @@ func (w *Worker) stateOnce(ctx context.Context) {
 	}
 	accounts := make([]metrics.AccountState, 0, len(integs))
 	for _, i := range integs {
-		a := metrics.AccountState{Platform: i.Platform, Account: i.Label, Status: i.Status}
+		a := metrics.AccountState{Platform: i.Platform, Account: accountLabel(i.OwnerName, i.OwnerEmail, i.Label), Status: i.Status}
 		if i.LastSyncedAt.Valid {
 			a.LastSynced = i.LastSyncedAt.Time
 		}
 		accounts = append(accounts, a)
 	}
 	metrics.SetState(queue, accounts)
+}
+
+// accountLabel identifica a conta nas métricas/alertas: "pessoa/conta" (amigos podem ter contas com
+// o mesmo apelido).
+func accountLabel(name, email, label string) string {
+	who := name
+	if who == "" {
+		who, _, _ = strings.Cut(email, "@")
+	}
+	if who == "" {
+		return label
+	}
+	return who + "/" + label
 }

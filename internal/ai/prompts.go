@@ -66,18 +66,8 @@ func trophyGuidePrompt(t dbgen.GetTrophyWithGameRow) string {
 	if !t.IsBase {
 		fmt.Fprintf(&b, "Grupo: DLC \"%s\"\n", t.GroupName)
 	}
-	if t.Progress != nil && t.Target != nil {
-		fmt.Fprintf(&b, "Progresso atual do jogador: %d/%d\n", *t.Progress, *t.Target)
-	}
-	if t.Earned {
-		b.WriteString("O jogador JÁ tem este troféu (guia para referência).\n")
-	}
-	if len(t.Tags) > 0 {
-		fmt.Fprintf(&b, "Marcações do jogador: %s\n", strings.Join(t.Tags, ", "))
-	}
-	if t.Notes != "" {
-		fmt.Fprintf(&b, "Notas do jogador: %s\n", t.Notes)
-	}
+	// O guia de troféu é COMPARTILHADO entre os usuários: sem progresso, marcações ou notas de
+	// ninguém no prompt (o roadmap e o chat, que são de cada pessoa, é que levam o progresso).
 	b.WriteString("\nPreencha o schema seguindo as regras de escrita: em `where`, onde o troféu sai (capítulo/fase/área); " +
 		"`summary` em 1–2 frases dizendo o que fazer; `steps` curtos e em ordem (até 8); perdível + ponto de não retorno " +
 		"se for o caso; dificuldade 1–10; tempo estimado; dicas práticas (até 4); confiança 0–1; incerteza em uma frase; " +

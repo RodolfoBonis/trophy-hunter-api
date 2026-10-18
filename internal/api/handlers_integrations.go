@@ -18,7 +18,7 @@ import (
 
 // listIntegrations devolve as integrações (sem segredos) — GET /integrations.
 func (h *Handlers) listIntegrations(w http.ResponseWriter, r *http.Request) {
-	integs, err := h.q.ListIntegrations(r.Context())
+	integs, err := h.q.ListIntegrationsForUser(r.Context(), currentUser(r).ID)
 	if err != nil {
 		httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
 		return
@@ -57,7 +57,7 @@ func (h *Handlers) connectSteam(w http.ResponseWriter, r *http.Request) {
 	}
 
 	integ, err := h.syncer.ConnectSteam(r.Context(), syncpkg.ConnectSteamParams{
-		Label: req.Label, APIKey: req.APIKey, IDOrVanity: req.SteamIDOrVanity,
+		UserID: currentUser(r).ID, Label: req.Label, APIKey: req.APIKey, IDOrVanity: req.SteamIDOrVanity,
 	})
 	if err != nil {
 		httperr.Write(w, r, mapSteamError(err))
@@ -136,7 +136,7 @@ func (h *Handlers) loadIntegrationParam(w http.ResponseWriter, r *http.Request) 
 		httperr.Write(w, r, httperr.New(httperr.KindBadRequest, "Bad request", "id inválido"))
 		return dbgen.Integration{}, false
 	}
-	integ, err := h.q.GetIntegration(r.Context(), id)
+	integ, err := h.q.GetIntegrationForUser(r.Context(), dbgen.GetIntegrationForUserParams{ID: id, UserID: currentUser(r).ID})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			httperr.Write(w, r, httperr.New(httperr.KindNotFound, "Not found", "integração não encontrada"))
@@ -192,7 +192,7 @@ func (h *Handlers) connectPSN(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, r, httperr.Validation("apelido longo demais", httperr.FieldError{Field: "label", Code: "too_long"}))
 		return
 	}
-	integ, err := h.syncer.ConnectPSN(r.Context(), syncpkg.ConnectPSNParams{Label: req.Label, NPSSO: req.NPSSO})
+	integ, err := h.syncer.ConnectPSN(r.Context(), syncpkg.ConnectPSNParams{UserID: currentUser(r).ID, Label: req.Label, NPSSO: req.NPSSO})
 	if err != nil {
 		httperr.Write(w, r, mapPSNError(err))
 		return

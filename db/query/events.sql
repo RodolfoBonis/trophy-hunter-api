@@ -12,9 +12,11 @@ SELECT e.id, e.detected_at,
 FROM unlock_events e
 JOIN trophies t ON t.id = e.trophy_id
 JOIN games g ON g.id = t.game_id
-WHERE e.seen_at IS NULL
+WHERE g.user_id = sqlc.arg(user_id)::uuid AND e.seen_at IS NULL
 ORDER BY e.detected_at, t.earned_at NULLS LAST, e.id
 LIMIT 100;
 
 -- name: MarkUnlocksSeen :execrows
-UPDATE unlock_events SET seen_at = now() WHERE id = ANY(sqlc.arg(ids)::uuid[]) AND seen_at IS NULL;
+UPDATE unlock_events SET seen_at = now()
+WHERE id = ANY(sqlc.arg(ids)::uuid[]) AND seen_at IS NULL
+  AND trophy_id IN (SELECT t.id FROM trophies t JOIN games g ON g.id = t.game_id WHERE g.user_id = sqlc.arg(user_id)::uuid);

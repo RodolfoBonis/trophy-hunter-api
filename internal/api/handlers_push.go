@@ -12,7 +12,7 @@ import (
 
 // pushStatus — GET /push/key: se o push está ligado, a chave pública VAPID e quantos aparelhos.
 func (h *Handlers) pushStatus(w http.ResponseWriter, r *http.Request) {
-	n, err := h.q.CountPushSubscriptions(r.Context())
+	n, err := h.q.CountPushSubscriptions(r.Context(), currentUser(r).ID)
 	if err != nil {
 		writeInternal(w, r, err)
 		return
@@ -52,7 +52,7 @@ func (h *Handlers) subscribePush(w http.ResponseWriter, r *http.Request) {
 		ua = ua[:300]
 	}
 	if _, err := h.q.UpsertPushSubscription(r.Context(), dbgen.UpsertPushSubscriptionParams{
-		Endpoint: req.Endpoint, P256dh: req.Keys.P256dh, Auth: req.Keys.Auth, UserAgent: ua,
+		Endpoint: req.Endpoint, P256dh: req.Keys.P256dh, Auth: req.Keys.Auth, UserAgent: ua, UserID: currentUser(r).ID,
 	}); err != nil {
 		writeInternal(w, r, err)
 		return
@@ -69,7 +69,7 @@ func (h *Handlers) unsubscribePush(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, r, httperr.Validation("endpoint obrigatório", httperr.FieldError{Field: "endpoint", Code: "required"}))
 		return
 	}
-	if _, err := h.q.DeletePushSubscriptionByEndpoint(r.Context(), req.Endpoint); err != nil {
+	if _, err := h.q.DeletePushSubscriptionByEndpoint(r.Context(), dbgen.DeletePushSubscriptionByEndpointParams{Endpoint: req.Endpoint, UserID: currentUser(r).ID}); err != nil {
 		writeInternal(w, r, err)
 		return
 	}
@@ -82,7 +82,7 @@ func (h *Handlers) testPush(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, r, httperr.New(httperr.KindUnavailable, "Push indisponível", "as chaves VAPID não estão configuradas"))
 		return
 	}
-	res, err := h.push.Send(r.Context(), push.Message{
+	res, err := h.push.Send(r.Context(), currentUser(r).ID, push.Message{
 		Kind: push.KindTest, Title: "Trophy Hunter", Body: "Notificações funcionando. Bons troféus!", URL: "/", Tag: "test",
 	})
 	if err != nil {
@@ -94,7 +94,7 @@ func (h *Handlers) testPush(w http.ResponseWriter, r *http.Request) {
 
 // getNotificationPrefs — GET /notifications/preferences.
 func (h *Handlers) getNotificationPrefs(w http.ResponseWriter, r *http.Request) {
-	p, err := push.LoadPreferences(r.Context(), h.q)
+	p, err := push.LoadPreferences(r.Context(), h.q, currentUser(r).ID)
 	if err != nil {
 		writeInternal(w, r, err)
 		return
@@ -111,7 +111,7 @@ func (h *Handlers) putNotificationPrefs(w http.ResponseWriter, r *http.Request) 
 		httperr.Write(w, r, httperr.New(httperr.KindBadRequest, "Bad request", "corpo JSON inválido"))
 		return
 	}
-	if err := push.SavePreferences(r.Context(), h.q, p); err != nil {
+	if err := push.SavePreferences(r.Context(), h.q, currentUser(r).ID, p); err != nil {
 		writeInternal(w, r, err)
 		return
 	}

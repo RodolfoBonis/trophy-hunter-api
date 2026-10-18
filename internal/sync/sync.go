@@ -123,7 +123,9 @@ type Syncer struct {
 	steamFactory SteamFactory
 	psn          PSNAPI
 	notifier     *push.Service
-	logger       *slog.Logger
+	// steamServerKey: Steam Web API key do servidor (contas sem key própria usam esta).
+	steamServerKey string
+	logger         *slog.Logger
 }
 
 // Deps injeta as dependências do Syncer.
@@ -137,20 +139,23 @@ type Deps struct {
 	PSN PSNAPI
 	// Notifier entrega os jobs `notify` (só no worker; nil = descarta).
 	Notifier *push.Service
-	Logger   *slog.Logger
+	// SteamServerKey: key do servidor para contas Steam sem key própria (amigos só informam o perfil).
+	SteamServerKey string
+	Logger         *slog.Logger
 }
 
 // New constrói o Syncer.
 func New(d Deps) *Syncer {
 	return &Syncer{
-		q:            d.Queries,
-		pool:         d.Pool,
-		queue:        d.Queue,
-		cipher:       d.Cipher,
-		steamFactory: d.SteamFactory,
-		psn:          d.PSN,
-		notifier:     d.Notifier,
-		logger:       d.Logger,
+		q:              d.Queries,
+		pool:           d.Pool,
+		queue:          d.Queue,
+		cipher:         d.Cipher,
+		steamFactory:   d.SteamFactory,
+		psn:            d.PSN,
+		notifier:       d.Notifier,
+		steamServerKey: d.SteamServerKey,
+		logger:         d.Logger,
 	}
 }
 
@@ -266,15 +271,29 @@ func (s *Syncer) loadSteam(ctx context.Context, integrationID pgtype.UUID) (dbge
 	if err != nil {
 		return dbgen.Integration{}, nil, steamCredentials{}, fmt.Errorf("carregar integração steam: %w", err)
 	}
+	key, creds, err := s.steamCreds(integ)
+	if err != nil {
+		return dbgen.Integration{}, nil, steamCredentials{}, err
+	}
+	return integ, s.steamFactory(key), creds, nil
+}
+
+// steamCreds decifra as credenciais da conta e devolve a key EFETIVA: a própria da conta ou, se ela
+// usa a do servidor (APIKey vazia), STEAM_SERVER_API_KEY.
+func (s *Syncer) steamCreds(integ dbgen.Integration) (string, steamCredentials, error) {
 	plain, err := s.cipher.Decrypt(integ.CredentialsEnc, "steam")
 	if err != nil {
-		return dbgen.Integration{}, nil, steamCredentials{}, fmt.Errorf("decifrar credenciais steam: %w", err)
+		return "", steamCredentials{}, fmt.Errorf("decifrar credenciais steam: %w", err)
 	}
 	var creds steamCredentials
 	if err := json.Unmarshal(plain, &creds); err != nil {
-		return dbgen.Integration{}, nil, steamCredentials{}, fmt.Errorf("parse credenciais steam: %w", err)
+		return "", steamCredentials{}, fmt.Errorf("parse credenciais steam: %w", err)
 	}
-	return integ, s.steamFactory(creds.APIKey), creds, nil
+	key := creds.APIKey
+	if key == "" {
+		key = s.steamServerKey
+	}
+	return key, creds, nil
 }
 
 // deleteRun remove um run (bookkeeping) num contexto que sobrevive ao cancelamento do job.

@@ -52,10 +52,10 @@ func TestReconnectPushOncePerTransition(t *testing.T) {
 		SteamFactory: func(string) syncpkg.SteamAPI { return newFake() },
 		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	_, err := q.UpsertPushSubscription(ctx, dbgen.UpsertPushSubscriptionParams{Endpoint: "https://push/x", P256dh: "k", Auth: "a"})
+	_, err := q.UpsertPushSubscription(ctx, dbgen.UpsertPushSubscriptionParams{Endpoint: "https://push/x", P256dh: "k", Auth: "a", UserID: ownerID})
 	require.NoError(t, err)
 
-	integ, err := syncer.ConnectPSN(ctx, syncpkg.ConnectPSNParams{Label: "Principal", NPSSO: "GOOD"})
+	integ, err := syncer.ConnectPSN(ctx, syncpkg.ConnectPSNParams{UserID: ownerID, Label: "Principal", NPSSO: "GOOD"})
 	require.NoError(t, err)
 	processAll(t, jobs, syncer)
 	require.Empty(t, sender.titles(), "conta saudável e sync inicial: nada a avisar")

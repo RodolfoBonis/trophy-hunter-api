@@ -159,7 +159,10 @@ func TestOIDCMiddlewareInjectsUser(t *testing.T) {
 	code, seen := serve(a, bearer(fi.sign(t, map[string]any{"name": "Rodolfo"})))
 	require.Equal(t, http.StatusNoContent, code)
 	require.NotNil(t, seen)
-	assert.Equal(t, UserContext{Subject: "user-123", Email: "eu@rb.lab", Name: "Rodolfo"}, *seen)
+	assert.Equal(t, "user-123", seen.Subject)
+	assert.Equal(t, "eu@rb.lab", seen.Email)
+	assert.Equal(t, "Rodolfo", seen.Name)
+	assert.NotEmpty(t, seen.Issuer, "o issuer do token identifica o IdP (iss+sub)")
 
 	_, seen = serve(a, bearer(fi.sign(t, nil)))
 	require.NotNil(t, seen)
@@ -184,7 +187,7 @@ func TestDevMode(t *testing.T) {
 
 	code, seen := serve(a, http.Header{"X-Debug-User": {"dev-user"}, "X-Debug-Email": {"dev@local"}})
 	require.Equal(t, http.StatusNoContent, code)
-	assert.Equal(t, UserContext{Subject: "dev-user", Email: "dev@local"}, *seen)
+	assert.Equal(t, UserContext{Issuer: "dev", Subject: "dev-user", Email: "dev@local", EmailVerified: true}, *seen)
 
 	code, seen = serve(a, http.Header{})
 	assert.Equal(t, http.StatusUnauthorized, code)

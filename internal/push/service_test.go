@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
@@ -38,6 +39,9 @@ func (f *fakeSender) Send(_ context.Context, sub dbgen.PushSubscription, body []
 	return st, nil
 }
 
+// owner é o dono criado pela migration 00019.
+var owner = pgtype.UUID{Bytes: [16]byte{15: 1}, Valid: true}
+
 func TestSendHandlesGoneAndFailures(t *testing.T) {
 	pool := testsupport.NewPostgres(t)
 	ctx := context.Background()
@@ -45,41 +49,41 @@ func TestSendHandlesGoneAndFailures(t *testing.T) {
 	fake := &fakeSender{status: map[string]int{"https://push/gone": http.StatusGone, "https://push/broken": http.StatusInternalServerError}}
 	svc := push.New(q, push.Config{PublicKey: "pub", PrivateKey: "priv"}, fake, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	for _, ep := range []string{"https://push/ok", "https://push/gone", "https://push/broken"} {
-		_, err := q.UpsertPushSubscription(ctx, dbgen.UpsertPushSubscriptionParams{Endpoint: ep, P256dh: "k", Auth: "a"})
+		_, err := q.UpsertPushSubscription(ctx, dbgen.UpsertPushSubscriptionParams{Endpoint: ep, P256dh: "k", Auth: "a", UserID: owner})
 		require.NoError(t, err)
 	}
 
-	res, err := svc.Send(ctx, push.Message{Kind: push.KindTest, Title: "oi"})
+	res, err := svc.Send(ctx, owner, push.Message{Kind: push.KindTest, Title: "oi"})
 	require.NoError(t, err)
 	require.Equal(t, push.Result{Sent: 1, Failed: 1, Removed: 1}, res)
-	subs, err := q.ListPushSubscriptions(ctx)
+	subs, err := q.ListPushSubscriptions(ctx, owner)
 	require.NoError(t, err)
 	require.Len(t, subs, 2, "410 remove a inscrição")
 
 	// Inscrição que falha 10x seguidas é removida.
 	for i := 0; i < 9; i++ {
-		_, err = svc.Send(ctx, push.Message{Kind: push.KindTest})
+		_, err = svc.Send(ctx, owner, push.Message{Kind: push.KindTest})
 		require.NoError(t, err)
 	}
-	subs, err = q.ListPushSubscriptions(ctx)
+	subs, err = q.ListPushSubscriptions(ctx, owner)
 	require.NoError(t, err)
 	require.Len(t, subs, 1)
 	require.Equal(t, "https://push/ok", subs[0].Endpoint)
 
 	// Preferência desligada: Notify não envia; o teste sempre envia.
-	require.NoError(t, push.SavePreferences(ctx, q, push.Preferences{Unlocks: true}))
+	require.NoError(t, push.SavePreferences(ctx, q, owner, push.Preferences{Unlocks: true}))
 	fake.got = nil
-	res, err = svc.Notify(ctx, push.Message{Kind: push.KindAIReady, Title: "Guia pronto"})
+	res, err = svc.Notify(ctx, owner, push.Message{Kind: push.KindAIReady, Title: "Guia pronto"})
 	require.NoError(t, err)
 	require.Zero(t, res.Sent)
-	_, err = svc.Notify(ctx, push.Message{Kind: push.KindTest, Title: "teste"})
+	_, err = svc.Notify(ctx, owner, push.Message{Kind: push.KindTest, Title: "teste"})
 	require.NoError(t, err)
 	require.Len(t, fake.got, 1)
 
 	// Sem chaves: desligado, não envia nada.
 	off := push.New(q, push.Config{}, fake, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	require.False(t, off.Enabled())
-	res, err = off.Send(ctx, push.Message{Kind: push.KindTest})
+	res, err = off.Send(ctx, owner, push.Message{Kind: push.KindTest})
 	require.NoError(t, err)
 	require.Zero(t, res.Sent)
 }

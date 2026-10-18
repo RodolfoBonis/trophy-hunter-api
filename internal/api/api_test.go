@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
@@ -68,6 +69,7 @@ type testEnv struct {
 	sync  *syncpkg.Syncer
 	ai    *ai.Service
 	push  *recordingPush
+	pool  *pgxpool.Pool
 }
 
 func setup(t *testing.T) *testEnv {
@@ -87,8 +89,18 @@ func setupFull(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI
 
 // build monta o ambiente; com runner != nil liga a IA (Redis efêmero + serviço de IA com o runner
 // fake, que o teste executa via drainAI).
-func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, runner ai.Runner) *testEnv {
+// buildOpts ajusta o ambiente de teste (chave Steam do servidor, teto diário de IA).
+type buildOpts struct {
+	steamServerKey string
+	aiDailyLimit   int
+}
+
+func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, runner ai.Runner, opts ...func(*buildOpts)) *testEnv {
 	t.Helper()
+	var o buildOpts
+	for _, f := range opts {
+		f(&o)
+	}
 	pool := testsupport.NewPostgres(t)
 	pushSender := &recordingPush{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -102,8 +114,8 @@ func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, ru
 	jobs := queue.NewPostgres(pool, queue.DefaultBackoff)
 	notifier := push.New(q, push.Config{PublicKey: "BPUB", PrivateKey: "priv"}, pushSender, logger)
 	syncer := syncpkg.New(syncpkg.Deps{
-		Notifier: notifier,
-		Queries:  q, Pool: pool, Queue: jobs, Cipher: cipher,
+		Notifier: notifier, SteamServerKey: o.steamServerKey,
+		Queries: q, Pool: pool, Queue: jobs, Cipher: cipher,
 		SteamFactory: factory,
 		PSN:          psnAPI,
 		Logger:       logger,
@@ -111,21 +123,33 @@ func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, ru
 
 	authn := auth.New(context.Background(), config.Auth{Mode: config.AuthModeDev, RequiredRole: "trophy-hunter-user"}, logger)
 
-	deps := api.HandlerDeps{Queries: q, Pool: pool, Syncer: syncer, Logger: logger, Push: notifier}
+	deps := api.HandlerDeps{Queries: q, Pool: pool, Syncer: syncer, Logger: logger, Push: notifier, OwnerEmail: ownerEmail, AppURL: "https://trophy.test"}
 	var aiSvc *ai.Service
 	if runner != nil {
 		rdb := testsupport.NewRedis(t)
-		aiSvc = ai.New(ai.Deps{Queries: q, Queue: jobs, Redis: rdb, Runner: runner, Model: "sonnet", GuideModel: "opus", Workdir: t.TempDir(), Logger: logger})
+		aiSvc = ai.New(ai.Deps{Queries: q, Queue: jobs, Redis: rdb, Runner: runner, Model: "sonnet", GuideModel: "opus", Workdir: t.TempDir(), DailyLimit: o.aiDailyLimit, Logger: logger})
 		deps.AI, deps.Redis = aiSvc, rdb
 	}
 	handlers := api.NewHandlers(deps)
 	router := api.NewRouter(api.RouterDeps{Handlers: handlers, Auth: authn, Logger: logger, ServiceName: "test"})
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
-	return &testEnv{srv: srv, q: q, queue: jobs, sync: syncer, ai: aiSvc, push: pushSender}
+	return &testEnv{srv: srv, q: q, queue: jobs, sync: syncer, ai: aiSvc, push: pushSender, pool: pool}
 }
 
+// ownerEmail é o OWNER_EMAIL dos testes: as requisições padrão (do) são do dono.
+const ownerEmail = "owner@test"
+
 func (e *testEnv) do(t *testing.T, method, path, body string, auth bool) *http.Response {
+	t.Helper()
+	if !auth {
+		return e.doAs(t, "", "", method, path, body)
+	}
+	return e.doAs(t, "me", ownerEmail, method, path, body)
+}
+
+// doAs faz a requisição como outra identidade (sub/e-mail do IdP de dev). sub vazio = sem auth.
+func (e *testEnv) doAs(t *testing.T, sub, email, method, path, body string) *http.Response {
 	t.Helper()
 	var r io.Reader
 	if body != "" {
@@ -133,8 +157,10 @@ func (e *testEnv) do(t *testing.T, method, path, body string, auth bool) *http.R
 	}
 	req, err := http.NewRequest(method, e.srv.URL+path, r)
 	require.NoError(t, err)
-	if auth {
-		req.Header.Set("X-Debug-User", "me")
+	if sub != "" {
+		req.Header.Set("X-Debug-User", sub)
+		req.Header.Set("X-Debug-Email", email)
+		req.Header.Set("X-Debug-Name", sub)
 	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")

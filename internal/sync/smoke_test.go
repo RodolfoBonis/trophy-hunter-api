@@ -62,7 +62,7 @@ func TestSmokeEndToEndRealClient(t *testing.T) {
 		SteamFactory: factory, Logger: testLogger(),
 	})
 
-	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "REALISH_KEY", IDOrVanity: "76561197960000000"})
+	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{UserID: ownerID, APIKey: "REALISH_KEY", IDOrVanity: "76561197960000000"})
 	require.NoError(t, err)
 	require.Equal(t, "connected", integ.Status)
 
@@ -77,7 +77,7 @@ func TestSmokeEndToEndRealClient(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, trophies, 2)
 
-	rows, err := q.ListGames(ctx, dbgen.ListGamesParams{Sort: "last_played", Lim: 50, Off: 0, Almost: 0.8})
+	rows, err := q.ListGames(ctx, dbgen.ListGamesParams{UserID: ownerID, Sort: "last_played", Lim: 50, Off: 0, Almost: 0.8})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, int64(2), rows[0].Total)

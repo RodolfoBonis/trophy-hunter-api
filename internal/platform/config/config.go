@@ -52,6 +52,8 @@ type HTTP struct {
 	// CORSAllowedOrigins são as origens (scheme://host[:port]) autorizadas a chamar a API pelo
 	// browser. A API fica em subdomínio próprio (api.<app>.<domínio>), então o PWA é cross-origin.
 	CORSAllowedOrigins []string `env:"CORS_ALLOWED_ORIGINS" envSeparator:","`
+	// AppURL: base pública do web (links de convite).
+	AppURL string `env:"APP_URL" envDefault:"https://trophy.rodolfodebonis.com.br"`
 }
 
 // Metrics configura o endpoint de métricas do worker (a API expõe /metrics no próprio HTTP_ADDR).
@@ -81,10 +83,15 @@ type Redis struct {
 //   - Mode "dev" confia no header X-Debug-User (dev local, sem Keycloak). É aceito SOMENTE quando
 //     APP_ENV=dev e AUTH_ISSUER está vazio — nunca escorrega para produção por engano.
 type Auth struct {
-	Mode         AuthMode `env:"AUTH_MODE" envDefault:"oidc"`
-	Issuer       string   `env:"AUTH_ISSUER" envDefault:""`
-	Audience     string   `env:"AUTH_AUDIENCE" envDefault:"trophy-hunter-api"`
-	RequiredRole string   `env:"AUTH_REQUIRED_ROLE" envDefault:"trophy-hunter-user"`
+	Mode     AuthMode `env:"AUTH_MODE" envDefault:"oidc"`
+	Issuer   string   `env:"AUTH_ISSUER" envDefault:""`
+	Audience string   `env:"AUTH_AUDIENCE" envDefault:"trophy-hunter-api"`
+	// RequiredRole: realm role exigida no token. Vazio = não exige (multiusuário: o acesso é o
+	// convite aceito no app). No realm platform (antes da virada) era trophy-hunter-user.
+	RequiredRole string `env:"AUTH_REQUIRED_ROLE"`
+	// OwnerEmail: e-mail (verificado) do dono — reivindica a conta do dono no login, inclusive ao
+	// trocar de IdP. Vazio = ninguém reivindica (o dono não loga).
+	OwnerEmail string `env:"OWNER_EMAIL"`
 }
 
 // Crypto configura a chave mestra de criptografia das credenciais (AES-256-GCM).
@@ -141,9 +148,12 @@ type PSN struct {
 //   - RPS é o teto de requests por segundo do token bucket por processo. Com o fan-out, cada
 //     sync_game faz ~3 chamadas; 4 rps mantém o sync responsivo sem estourar a cota da Steam.
 type Steam struct {
-	BaseURL string  `env:"STEAM_API_BASE_URL" envDefault:"https://api.steampowered.com"`
-	Lang    string  `env:"STEAM_LANG" envDefault:"brazilian"`
-	RPS     float64 `env:"STEAM_RPS" envDefault:"4"`
+	BaseURL string `env:"STEAM_API_BASE_URL" envDefault:"https://api.steampowered.com"`
+	// ServerAPIKey: key do servidor para contas sem key própria (amigos só informam o perfil).
+	// SEGREDO (Vault k3s/trophy-hunter/prod/app).
+	ServerAPIKey string  `env:"STEAM_SERVER_API_KEY"`
+	Lang         string  `env:"STEAM_LANG" envDefault:"brazilian"`
+	RPS          float64 `env:"STEAM_RPS" envDefault:"4"`
 }
 
 // Option ajusta o carregamento.
@@ -275,8 +285,10 @@ type AI struct {
 	OAuthToken string `env:"CLAUDE_CODE_OAUTH_TOKEN"`
 	// Model é o do chat (resposta rápida); GuideModel o dos guias/roadmaps (ficam salvos: qualidade
 	// vale mais que velocidade).
-	Model      string        `env:"AI_MODEL" envDefault:"sonnet"`
-	GuideModel string        `env:"AI_MODEL_GUIDE" envDefault:"opus"`
+	Model      string `env:"AI_MODEL" envDefault:"sonnet"`
+	GuideModel string `env:"AI_MODEL_GUIDE" envDefault:"opus"`
+	// DailyLimit: pedidos de IA por membro em 24 h (0 = sem teto). O dono não tem teto.
+	DailyLimit int           `env:"AI_DAILY_LIMIT" envDefault:"30"`
 	JobTimeout time.Duration `env:"AI_JOB_TIMEOUT" envDefault:"6m"`
 	// Home é o HOME da CLI (~/.claude guarda as sessões do --resume do chat).
 	Home string `env:"AI_HOME" envDefault:"/home/node"`

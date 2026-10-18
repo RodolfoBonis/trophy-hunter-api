@@ -119,15 +119,15 @@ func TestPSNConnectAndSync(t *testing.T) {
 	fake := newFakePSN()
 	syncer := newPSNSyncer(t, pool, q, jobs, fake)
 
-	_, err := syncer.ConnectPSN(ctx, syncpkg.ConnectPSNParams{NPSSO: "BAD"})
+	_, err := syncer.ConnectPSN(ctx, syncpkg.ConnectPSNParams{UserID: ownerID, NPSSO: "BAD"})
 	require.ErrorIs(t, err, psn.ErrInvalidNPSSO)
 
-	integ, err := syncer.ConnectPSN(ctx, syncpkg.ConnectPSNParams{NPSSO: "GOOD"})
+	integ, err := syncer.ConnectPSN(ctx, syncpkg.ConnectPSNParams{UserID: ownerID, NPSSO: "GOOD"})
 	require.NoError(t, err)
 	require.Equal(t, "rb_lab", integ.Label, "label padrão = online ID")
 	require.Equal(t, "4242", integ.AccountID)
 	require.True(t, integ.RefreshTokenExpiresAt.Valid)
-	_, err = syncer.ConnectPSN(ctx, syncpkg.ConnectPSNParams{NPSSO: "OTHER"})
+	_, err = syncer.ConnectPSN(ctx, syncpkg.ConnectPSNParams{UserID: ownerID, NPSSO: "OTHER"})
 	require.ErrorIs(t, err, syncpkg.ErrAccountExists)
 
 	processAll(t, jobs, syncer)
@@ -189,7 +189,7 @@ func TestPSNRefreshAndReconnect(t *testing.T) {
 	fake.accessTTL = time.Second // access "expira" na hora → o sync renova pelo refresh
 	syncer := newPSNSyncer(t, pool, q, jobs, fake)
 
-	integ, err := syncer.ConnectPSN(ctx, syncpkg.ConnectPSNParams{Label: "Principal", NPSSO: "GOOD"})
+	integ, err := syncer.ConnectPSN(ctx, syncpkg.ConnectPSNParams{UserID: ownerID, Label: "Principal", NPSSO: "GOOD"})
 	require.NoError(t, err)
 	processAll(t, jobs, syncer)
 	require.Positive(t, fake.refreshes, "renovou o access pelo refresh token")
@@ -227,7 +227,7 @@ func TestPSNAutoRenewWithStoredNPSSO(t *testing.T) {
 	fake := newFakePSN()
 	syncer := newPSNSyncer(t, pool, q, jobs, fake)
 
-	integ, err := syncer.ConnectPSN(ctx, syncpkg.ConnectPSNParams{NPSSO: "GOOD"})
+	integ, err := syncer.ConnectPSN(ctx, syncpkg.ConnectPSNParams{UserID: ownerID, NPSSO: "GOOD"})
 	require.NoError(t, err)
 	processAll(t, jobs, syncer)
 	base := fake.exchanges

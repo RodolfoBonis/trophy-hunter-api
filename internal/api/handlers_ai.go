@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,8 +20,8 @@ import (
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/httperr"
 )
 
-// guideDTO ↔ components.schemas.AIGuide. content = gerado pelo modelo; edited_content = correção
-// do usuário (a UI mostra a editada quando existe).
+// guideDTO ↔ components.schemas.AIGuide. content = gerado pelo modelo (guia de troféu é
+// compartilhado); edited_content = correção PRIVADA de quem está vendo (a UI mostra a editada).
 type guideDTO struct {
 	ID            string          `json:"id"`
 	Scope         string          `json:"scope"`
@@ -36,12 +38,36 @@ type guideEnvelope struct {
 	Guide *guideDTO `json:"guide"`
 }
 
-func toGuideDTO(g dbgen.AiGuide) guideDTO {
+func toGuideDTO(g dbgen.AiGuide, edited []byte) guideDTO {
 	return guideDTO{
 		ID: uuidStr(g.ID), Scope: g.Scope, Status: g.Status,
-		Content: rawOrNull(g.Content), EditedContent: rawOrNull(g.EditedContent),
+		Content: rawOrNull(g.Content), EditedContent: rawOrNull(edited),
 		Model: g.Model, Error: g.Error, GeneratedAt: tptr(g.GeneratedAt), UpdatedAt: tptr(g.UpdatedAt),
 	}
+}
+
+// guideFor monta o DTO com a edição privada do usuário (se houver).
+func (h *Handlers) guideFor(ctx context.Context, u dbgen.User, g dbgen.AiGuide) (guideDTO, error) {
+	edited, err := h.q.GetGuideEdit(ctx, dbgen.GetGuideEditParams{UserID: u.ID, GuideID: g.ID})
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return guideDTO{}, err
+	}
+	return toGuideDTO(g, edited), nil
+}
+
+// canSeeGuide: guia de troféu é de todos; roadmap só do dono dele.
+func canSeeGuide(u dbgen.User, g dbgen.AiGuide) bool {
+	return g.Scope == ai.ScopeTrophy || g.UserID == u.ID
+}
+
+// writeAIRequestErr traduz os erros de pedido de IA (teto diário → 429 com código estável).
+func writeAIRequestErr(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, ai.ErrDailyLimit) {
+		httperr.Write(w, r, httperr.New(httperr.KindRateLimited, "Limite diário de IA",
+			"você atingiu o limite de pedidos de IA de hoje; tente amanhã").WithCode("ai_daily_limit"))
+		return
+	}
+	writeInternal(w, r, err)
 }
 
 func rawOrNull(b []byte) json.RawMessage {
@@ -66,6 +92,9 @@ func (h *Handlers) loadTrophyParam(w http.ResponseWriter, r *http.Request) (dbge
 		return dbgen.GetTrophyWithGameRow{}, false
 	}
 	t, err := h.q.GetTrophyWithGame(r.Context(), id)
+	if err == nil && t.GameUserID != currentUser(r).ID {
+		err = pgx.ErrNoRows // de outra pessoa: 404, sem revelar que existe
+	}
 	if err != nil {
 		writeNotFoundOr(w, r, err, "troféu não encontrado")
 		return t, false
@@ -73,9 +102,8 @@ func (h *Handlers) loadTrophyParam(w http.ResponseWriter, r *http.Request) (dbge
 	return t, true
 }
 
-// writeGuide responde {guide} (null quando ainda não existe).
-func (h *Handlers) writeGuide(w http.ResponseWriter, r *http.Request, scope, platform, gameExt, trophyExt string) {
-	g, err := h.q.GetGuide(r.Context(), dbgen.GetGuideParams{Scope: scope, Platform: platform, GameExternalID: gameExt, TrophyExternalID: trophyExt})
+// writeGuide responde {guide} (null quando ainda não existe), com a edição privada do usuário.
+func (h *Handlers) writeGuide(w http.ResponseWriter, r *http.Request, g dbgen.AiGuide, err error) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusOK, guideEnvelope{})
 		return
@@ -84,17 +112,22 @@ func (h *Handlers) writeGuide(w http.ResponseWriter, r *http.Request, scope, pla
 		writeInternal(w, r, err)
 		return
 	}
-	d := toGuideDTO(g)
+	d, err := h.guideFor(r.Context(), currentUser(r), g)
+	if err != nil {
+		writeInternal(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, guideEnvelope{Guide: &d})
 }
 
-// getTrophyGuide — GET /trophies/{id}/guide.
+// getTrophyGuide — GET /trophies/{id}/guide (guia compartilhado do troféu).
 func (h *Handlers) getTrophyGuide(w http.ResponseWriter, r *http.Request) {
 	t, ok := h.loadTrophyParam(w, r)
 	if !ok {
 		return
 	}
-	h.writeGuide(w, r, ai.ScopeTrophy, t.GamePlatform, t.GameExternalID, t.ExternalID)
+	g, err := h.q.GetTrophyGuide(r.Context(), dbgen.GetTrophyGuideParams{Platform: t.GamePlatform, GameExternalID: t.GameExternalID, TrophyExternalID: t.ExternalID})
+	h.writeGuide(w, r, g, err)
 }
 
 // generateTrophyGuide — POST /trophies/{id}/guide: gera (ou regenera) o guia; resposta via stream.
@@ -106,21 +139,27 @@ func (h *Handlers) generateTrophyGuide(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	g, err := h.ai.RequestTrophyGuide(r.Context(), t)
+	g, err := h.ai.RequestTrophyGuide(r.Context(), currentUser(r), t)
+	if err != nil {
+		writeAIRequestErr(w, r, err)
+		return
+	}
+	d, err := h.guideFor(r.Context(), currentUser(r), g)
 	if err != nil {
 		writeInternal(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, toGuideDTO(g))
+	writeJSON(w, http.StatusAccepted, d)
 }
 
-// getRoadmap — GET /games/{id}/roadmap.
+// getRoadmap — GET /games/{id}/roadmap (roadmap do usuário).
 func (h *Handlers) getRoadmap(w http.ResponseWriter, r *http.Request) {
-	g, ok := h.loadGameParam(w, r)
+	game, ok := h.loadGameParam(w, r)
 	if !ok {
 		return
 	}
-	h.writeGuide(w, r, ai.ScopeRoadmap, g.Platform, g.ExternalID, "")
+	g, err := h.q.GetRoadmap(r.Context(), dbgen.GetRoadmapParams{UserID: currentUser(r).ID, Platform: game.Platform, GameExternalID: game.ExternalID})
+	h.writeGuide(w, r, g, err)
 }
 
 // generateRoadmap — POST /games/{id}/roadmap.
@@ -132,12 +171,17 @@ func (h *Handlers) generateRoadmap(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	g, err := h.ai.RequestRoadmap(r.Context(), game)
+	g, err := h.ai.RequestRoadmap(r.Context(), currentUser(r), game)
+	if err != nil {
+		writeAIRequestErr(w, r, err)
+		return
+	}
+	d, err := h.guideFor(r.Context(), currentUser(r), g)
 	if err != nil {
 		writeInternal(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, toGuideDTO(g))
+	writeJSON(w, http.StatusAccepted, d)
 }
 
 type editGuideRequest struct {
@@ -152,7 +196,11 @@ func (h *Handlers) editGuide(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, r, httperr.New(httperr.KindBadRequest, "Bad request", "id inválido"))
 		return
 	}
+	u := currentUser(r)
 	g, err := h.q.GetGuideByID(r.Context(), id)
+	if err == nil && !canSeeGuide(u, g) {
+		err = pgx.ErrNoRows
+	}
 	if err != nil {
 		writeNotFoundOr(w, r, err, "guia não encontrado")
 		return
@@ -170,12 +218,17 @@ func (h *Handlers) editGuide(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	g, err = h.q.SetGuideEdit(r.Context(), dbgen.SetGuideEditParams{ID: g.ID, EditedContent: edited})
+	// A correção é PRIVADA: só quem editou vê (o guia de troféu continua igual para os outros).
+	if edited == nil {
+		err = h.q.DeleteGuideEdit(r.Context(), dbgen.DeleteGuideEditParams{UserID: u.ID, GuideID: g.ID})
+	} else {
+		err = h.q.UpsertGuideEdit(r.Context(), dbgen.UpsertGuideEditParams{UserID: u.ID, GuideID: g.ID, Content: edited})
+	}
 	if err != nil {
 		writeInternal(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toGuideDTO(g))
+	writeJSON(w, http.StatusOK, toGuideDTO(g, edited))
 }
 
 // chatMessageDTO ↔ components.schemas.ChatMessage.
@@ -201,7 +254,7 @@ func (h *Handlers) getChat(w http.ResponseWriter, r *http.Request) {
 	out := struct {
 		Messages []chatMessageDTO `json:"messages"`
 	}{Messages: []chatMessageDTO{}}
-	th, err := h.q.GetActiveThread(r.Context(), dbgen.GetActiveThreadParams{Platform: g.Platform, GameExternalID: g.ExternalID})
+	th, err := h.q.GetActiveThread(r.Context(), dbgen.GetActiveThreadParams{UserID: currentUser(r).ID, Platform: g.Platform, GameExternalID: g.ExternalID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusOK, out)
 		return
@@ -237,8 +290,11 @@ func (h *Handlers) sendChat(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, r, httperr.New(httperr.KindBadRequest, "Bad request", "corpo JSON inválido"))
 		return
 	}
-	user, assistant, err := h.ai.SendChat(r.Context(), g, req.Message)
+	user, assistant, err := h.ai.SendChat(r.Context(), currentUser(r), g, req.Message)
 	switch {
+	case errors.Is(err, ai.ErrDailyLimit):
+		writeAIRequestErr(w, r, err)
+		return
 	case errors.Is(err, ai.ErrEmptyChat):
 		httperr.Write(w, r, httperr.Validation("mensagem vazia", httperr.FieldError{Field: "message", Code: "required"}))
 		return
@@ -258,7 +314,7 @@ func (h *Handlers) resetChat(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.q.ArchiveThread(r.Context(), dbgen.ArchiveThreadParams{Platform: g.Platform, GameExternalID: g.ExternalID}); err != nil {
+	if err := h.q.ArchiveThread(r.Context(), dbgen.ArchiveThreadParams{UserID: currentUser(r).ID, Platform: g.Platform, GameExternalID: g.ExternalID}); err != nil {
 		writeInternal(w, r, err)
 		return
 	}
@@ -359,7 +415,15 @@ type finalEvent struct{ typ, data string }
 // evento final equivalente (para quando a stream do Redis já expirou).
 func (h *Handlers) streamFinalState(w http.ResponseWriter, r *http.Request, id pgtype.UUID) (*finalEvent, bool) {
 	ctx := r.Context()
+	u := currentUser(r)
+	notFound := func() (*finalEvent, bool) {
+		httperr.Write(w, r, httperr.New(httperr.KindNotFound, "Not found", "resposta não encontrada"))
+		return nil, false
+	}
 	if g, err := h.q.GetGuideByID(ctx, id); err == nil {
+		if !canSeeGuide(u, g) {
+			return notFound()
+		}
 		switch g.Status {
 		case "ready":
 			return &finalEvent{stream.TypeDone, ""}, true
@@ -371,14 +435,13 @@ func (h *Handlers) streamFinalState(w http.ResponseWriter, r *http.Request, id p
 		writeInternal(w, r, err)
 		return nil, false
 	}
-	m, err := h.q.GetChatMessage(ctx, id)
-	if err != nil || m.Role != "assistant" {
-		if err == nil || errors.Is(err, pgx.ErrNoRows) {
-			httperr.Write(w, r, httperr.New(httperr.KindNotFound, "Not found", "resposta não encontrada"))
-		} else {
-			writeInternal(w, r, err)
-		}
+	m, err := h.q.GetChatMessageOwner(ctx, id)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		writeInternal(w, r, err)
 		return nil, false
+	}
+	if err != nil || m.Role != "assistant" || m.UserID != u.ID {
+		return notFound()
 	}
 	switch m.Status {
 	case "done":

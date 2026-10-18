@@ -16,7 +16,7 @@ SELECT t.id, t.name, t.type, t.hidden, t.icon, t.rarity_pct, t.tags, t.server_sh
        gp.id AS game_id, gp.title AS game_title, gp.platform
 FROM trophies t
 JOIN game_progress gp ON gp.id = t.game_id
-WHERE NOT t.earned AND NOT gp.abandoned AND gp.earned < gp.total
+WHERE gp.user_id = $1::uuid AND NOT t.earned AND NOT gp.abandoned AND gp.earned < gp.total
   AND (t.tags && ARRAY['missable','online','difficulty']::text[] OR t.server_shutdown_risk)
 ORDER BY t.server_shutdown_risk DESC, gp.title, t.name
 LIMIT 200
@@ -38,8 +38,8 @@ type AlertsRow struct {
 
 // Alertas: troféus que faltam marcados como perdíveis/online/dificuldade (ou com risco de servidor
 // fechar) em jogos não concluídos e não abandonados.
-func (q *Queries) Alerts(ctx context.Context) ([]AlertsRow, error) {
-	rows, err := q.db.Query(ctx, alerts)
+func (q *Queries) Alerts(ctx context.Context, userID pgtype.UUID) ([]AlertsRow, error) {
+	rows, err := q.db.Query(ctx, alerts, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +130,7 @@ const evolution = `-- name: Evolution :many
 SELECT to_char(date_trunc('month', t.earned_at), 'YYYY-MM') AS month, COUNT(*)::int AS earned
 FROM best_games b
 JOIN trophies t ON t.game_id = b.id
-WHERE t.earned AND t.earned_at IS NOT NULL
+WHERE b.user_id = $1::uuid AND t.earned AND t.earned_at IS NOT NULL
 GROUP BY 1
 ORDER BY 1
 `
@@ -141,8 +141,8 @@ type EvolutionRow struct {
 }
 
 // Desbloqueios por mês (jogos contados pela conta mais avançada), para o gráfico de evolução.
-func (q *Queries) Evolution(ctx context.Context) ([]EvolutionRow, error) {
-	rows, err := q.db.Query(ctx, evolution)
+func (q *Queries) Evolution(ctx context.Context, userID pgtype.UUID) ([]EvolutionRow, error) {
+	rows, err := q.db.Query(ctx, evolution, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +171,7 @@ SELECT b.id, b.integration_id, b.platform, b.external_id, b.title, b.cover, b.he
        (COUNT(t.id) FILTER (WHERE NOT t.earned AND ('online' = ANY(t.tags) OR t.server_shutdown_risk)))::int AS remaining_online
 FROM best_games b
 JOIN trophies t ON t.game_id = b.id
-WHERE NOT b.abandoned AND b.has_achievements AND b.total > 0 AND b.earned > 0 AND b.earned < b.total
+WHERE b.user_id = $1::uuid AND NOT b.abandoned AND b.has_achievements AND b.total > 0 AND b.earned > 0 AND b.earned < b.total
 GROUP BY b.id, b.integration_id, b.platform, b.external_id, b.title, b.cover, b.hero, b.priority,
          b.total, b.earned, b.completion_pct, b.last_unlock_at, b.last_played_at
 `
@@ -200,8 +200,8 @@ type NextPlatinumCandidatesRow struct {
 // Candidatos à "Próxima Platina": jogos começados e não concluídos/abandonados (conta mais
 // avançada), com o que falta: quantidade, raridade média do que falta (maior % = mais fácil) e
 // quantos dos que faltam estão marcados como perdíveis/online.
-func (q *Queries) NextPlatinumCandidates(ctx context.Context) ([]NextPlatinumCandidatesRow, error) {
-	rows, err := q.db.Query(ctx, nextPlatinumCandidates)
+func (q *Queries) NextPlatinumCandidates(ctx context.Context, userID pgtype.UUID) ([]NextPlatinumCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, nextPlatinumCandidates, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -244,10 +244,15 @@ SELECT t.id, t.name, t.type, t.icon, t.rarity_pct::float8 AS rarity_pct, t.earne
        b.id AS game_id, b.title AS game_title, b.platform
 FROM best_games b
 JOIN trophies t ON t.game_id = b.id
-WHERE t.earned AND t.rarity_pct IS NOT NULL
+WHERE b.user_id = $1::uuid AND t.earned AND t.rarity_pct IS NOT NULL
 ORDER BY t.rarity_pct ASC, t.earned_at DESC
-LIMIT $1
+LIMIT $2
 `
+
+type RarestEarnedParams struct {
+	UserID pgtype.UUID
+	Lim    int32
+}
 
 type RarestEarnedRow struct {
 	ID        pgtype.UUID
@@ -262,8 +267,8 @@ type RarestEarnedRow struct {
 }
 
 // As conquistas/troféus ganhos mais raros (menor % de jogadores).
-func (q *Queries) RarestEarned(ctx context.Context, lim int32) ([]RarestEarnedRow, error) {
-	rows, err := q.db.Query(ctx, rarestEarned, lim)
+func (q *Queries) RarestEarned(ctx context.Context, arg RarestEarnedParams) ([]RarestEarnedRow, error) {
+	rows, err := q.db.Query(ctx, rarestEarned, arg.UserID, arg.Lim)
 	if err != nil {
 		return nil, err
 	}
@@ -295,10 +300,15 @@ func (q *Queries) RarestEarned(ctx context.Context, lim int32) ([]RarestEarnedRo
 const recentCompletions = `-- name: RecentCompletions :many
 SELECT b.id, b.title, b.platform, b.external_id, b.cover, b.hero, b.total, b.last_unlock_at
 FROM best_games b
-WHERE b.total > 0 AND b.earned = b.total
+WHERE b.user_id = $1::uuid AND b.total > 0 AND b.earned = b.total
 ORDER BY b.last_unlock_at DESC NULLS LAST
-LIMIT $1
+LIMIT $2
 `
+
+type RecentCompletionsParams struct {
+	UserID pgtype.UUID
+	Lim    int32
+}
 
 type RecentCompletionsRow struct {
 	ID           pgtype.UUID
@@ -312,8 +322,8 @@ type RecentCompletionsRow struct {
 }
 
 // Jogos completados (platina / 100%), do mais recente; a data é o último desbloqueio.
-func (q *Queries) RecentCompletions(ctx context.Context, lim int32) ([]RecentCompletionsRow, error) {
-	rows, err := q.db.Query(ctx, recentCompletions, lim)
+func (q *Queries) RecentCompletions(ctx context.Context, arg RecentCompletionsParams) ([]RecentCompletionsRow, error) {
+	rows, err := q.db.Query(ctx, recentCompletions, arg.UserID, arg.Lim)
 	if err != nil {
 		return nil, err
 	}
@@ -351,8 +361,13 @@ SELECT
     (COUNT(*) FILTER (WHERE NOT abandoned AND earned > 0 AND completion_pct < $1::float8))::int      AS in_progress,
     (COUNT(*) FILTER (WHERE NOT abandoned AND earned = 0))::int                          AS not_started
 FROM best_games
-WHERE has_achievements AND total > 0
+WHERE user_id = $2::uuid AND has_achievements AND total > 0
 `
+
+type StatsGamesParams struct {
+	Almost float64
+	UserID pgtype.UUID
+}
 
 type StatsGamesRow struct {
 	Total      int32
@@ -363,10 +378,10 @@ type StatsGamesRow struct {
 	NotStarted int32
 }
 
-// Estatísticas, ranking e linha do tempo. Tudo que é "por jogo" usa best_games (conta mais
+// Estatísticas, ranking e linha do tempo — sempre DO USUÁRIO (user_id). Tudo que é "por jogo" usa best_games (conta mais
 // avançada, ver migration 00015). Desbloqueios (recentes/linha do tempo) são de todas as contas.
-func (q *Queries) StatsGames(ctx context.Context, almost float64) (StatsGamesRow, error) {
-	row := q.db.QueryRow(ctx, statsGames, almost)
+func (q *Queries) StatsGames(ctx context.Context, arg StatsGamesParams) (StatsGamesRow, error) {
+	row := q.db.QueryRow(ctx, statsGames, arg.Almost, arg.UserID)
 	var i StatsGamesRow
 	err := row.Scan(
 		&i.Total,
@@ -398,6 +413,7 @@ SELECT
     (COUNT(t.id) FILTER (WHERE t.earned AND t.rarity_pct >= 50))::int                  AS common_earned
 FROM best_games b
 JOIN trophies t ON t.game_id = b.id
+WHERE b.user_id = $1::uuid
 `
 
 type StatsTrophiesRow struct {
@@ -418,8 +434,8 @@ type StatsTrophiesRow struct {
 	CommonEarned    int32
 }
 
-func (q *Queries) StatsTrophies(ctx context.Context) (StatsTrophiesRow, error) {
-	row := q.db.QueryRow(ctx, statsTrophies)
+func (q *Queries) StatsTrophies(ctx context.Context, userID pgtype.UUID) (StatsTrophiesRow, error) {
+	row := q.db.QueryRow(ctx, statsTrophies, userID)
 	var i StatsTrophiesRow
 	err := row.Scan(
 		&i.Total,
@@ -449,14 +465,15 @@ SELECT t.id, t.name, t.description, t.type, t.hidden, t.icon, t.rarity_pct, t.ea
 FROM trophies t
 JOIN game_progress gp ON gp.id = t.game_id
 JOIN integrations i ON i.id = gp.integration_id
-WHERE t.earned AND t.earned_at IS NOT NULL
-  AND ($1::timestamptz IS NULL
-       OR (t.earned_at, t.id) < ($1::timestamptz, $2::uuid))
+WHERE gp.user_id = $1::uuid AND t.earned AND t.earned_at IS NOT NULL
+  AND ($2::timestamptz IS NULL
+       OR (t.earned_at, t.id) < ($2::timestamptz, $3::uuid))
 ORDER BY t.earned_at DESC, t.id DESC
-LIMIT $3
+LIMIT $4
 `
 
 type TimelineParams struct {
+	UserID   pgtype.UUID
 	BeforeAt pgtype.Timestamptz
 	BeforeID pgtype.UUID
 	Lim      int32
@@ -484,7 +501,12 @@ type TimelineRow struct {
 // Linha do tempo: desbloqueios de TODAS as contas, do mais recente, com paginação por cursor
 // (earned_at, id). completes_game = este desbloqueio fechou o jogo (platina/100%) naquela conta.
 func (q *Queries) Timeline(ctx context.Context, arg TimelineParams) ([]TimelineRow, error) {
-	rows, err := q.db.Query(ctx, timeline, arg.BeforeAt, arg.BeforeID, arg.Lim)
+	rows, err := q.db.Query(ctx, timeline,
+		arg.UserID,
+		arg.BeforeAt,
+		arg.BeforeID,
+		arg.Lim,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -527,8 +549,8 @@ UPDATE games SET
     notes      = COALESCE($3::text, notes),
     tags       = COALESCE($4::text[], tags),
     updated_at = now()
-WHERE id = $5
-RETURNING id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, unify_locked
+WHERE id = $5 AND user_id = $6::uuid
+RETURNING id, platform, external_id, np_service_name, unified_game_id, title, normalized_title, icon, cover, platforms, has_achievements, has_platinum, last_played_at, playtime_minutes, remote_updated_at, schema_synced_at, percentages_synced_at, abandoned, priority, notes, tags, created_at, updated_at, integration_id, hero, unify_locked, user_id
 `
 
 type UpdateGameAnnotationsParams struct {
@@ -537,6 +559,7 @@ type UpdateGameAnnotationsParams struct {
 	Notes     *string
 	Tags      []string
 	ID        pgtype.UUID
+	UserID    pgtype.UUID
 }
 
 // Marcações do usuário no jogo (só os campos enviados mudam).
@@ -547,6 +570,7 @@ func (q *Queries) UpdateGameAnnotations(ctx context.Context, arg UpdateGameAnnot
 		arg.Notes,
 		arg.Tags,
 		arg.ID,
+		arg.UserID,
 	)
 	var i Game
 	err := row.Scan(
@@ -576,6 +600,7 @@ func (q *Queries) UpdateGameAnnotations(ctx context.Context, arg UpdateGameAnnot
 		&i.IntegrationID,
 		&i.Hero,
 		&i.UnifyLocked,
+		&i.UserID,
 	)
 	return i, err
 }
@@ -587,7 +612,7 @@ UPDATE trophies SET
     tags                 = COALESCE($3::text[], tags),
     server_shutdown_risk = COALESCE($4::boolean, server_shutdown_risk),
     updated_at           = now()
-WHERE id = $5
+WHERE trophies.id = $5 AND trophies.game_id IN (SELECT g.id FROM games g WHERE g.user_id = $6::uuid)
 RETURNING id, game_id, group_id, external_id, name, description, type, hidden, icon, icon_locked, rarity_pct, earned, earned_at, progress, target, priority, notes, tags, server_shutdown_risk, created_at, updated_at
 `
 
@@ -597,6 +622,7 @@ type UpdateTrophyAnnotationsParams struct {
 	Tags               []string
 	ServerShutdownRisk *bool
 	ID                 pgtype.UUID
+	UserID             pgtype.UUID
 }
 
 // Marcações do usuário no troféu (só os campos enviados mudam).
@@ -607,6 +633,7 @@ func (q *Queries) UpdateTrophyAnnotations(ctx context.Context, arg UpdateTrophyA
 		arg.Tags,
 		arg.ServerShutdownRisk,
 		arg.ID,
+		arg.UserID,
 	)
 	var i Trophy
 	err := row.Scan(

@@ -93,27 +93,28 @@ type statsDTO struct {
 // getStats devolve o resumo do dashboard — GET /stats. Jogos contam uma vez (conta mais avançada).
 func (h *Handlers) getStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	games, err := h.q.StatsGames(ctx, h.almostThreshold)
+	uid := currentUser(r).ID
+	games, err := h.q.StatsGames(ctx, dbgen.StatsGamesParams{UserID: uid, Almost: h.almostThreshold})
 	if err != nil {
 		writeInternal(w, r, err)
 		return
 	}
-	tr, err := h.q.StatsTrophies(ctx)
+	tr, err := h.q.StatsTrophies(ctx, uid)
 	if err != nil {
 		writeInternal(w, r, err)
 		return
 	}
-	rarest, err := h.q.RarestEarned(ctx, rarestLimit)
+	rarest, err := h.q.RarestEarned(ctx, dbgen.RarestEarnedParams{UserID: uid, Lim: rarestLimit})
 	if err != nil {
 		writeInternal(w, r, err)
 		return
 	}
-	comps, err := h.q.RecentCompletions(ctx, completionsLimit)
+	comps, err := h.q.RecentCompletions(ctx, dbgen.RecentCompletionsParams{UserID: uid, Lim: completionsLimit})
 	if err != nil {
 		writeInternal(w, r, err)
 		return
 	}
-	evo, err := h.q.Evolution(ctx)
+	evo, err := h.q.Evolution(ctx, uid)
 	if err != nil {
 		writeInternal(w, r, err)
 		return
@@ -208,7 +209,7 @@ type todayDTO struct {
 // getNext devolve a fila Próxima Platina — GET /next (ver internal/ranking).
 func (h *Handlers) getNext(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	rows, err := h.q.NextPlatinumCandidates(ctx)
+	rows, err := h.q.NextPlatinumCandidates(ctx, currentUser(r).ID)
 	if err != nil {
 		writeInternal(w, r, err)
 		return
@@ -300,6 +301,7 @@ func (h *Handlers) getTimeline(w http.ResponseWriter, r *http.Request) {
 		}
 		params.BeforeAt, params.BeforeID = at, id
 	}
+	params.UserID = currentUser(r).ID
 	rows, err := h.q.Timeline(r.Context(), params)
 	if err != nil {
 		writeInternal(w, r, err)
@@ -356,7 +358,7 @@ type alertDTO struct {
 
 // getAlerts lista troféus que faltam marcados como perdíveis/online/dificuldade — GET /alerts.
 func (h *Handlers) getAlerts(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.q.Alerts(r.Context())
+	rows, err := h.q.Alerts(r.Context(), currentUser(r).ID)
 	if err != nil {
 		writeInternal(w, r, err)
 		return
@@ -439,7 +441,7 @@ func (h *Handlers) patchGame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g, err := h.q.UpdateGameAnnotations(r.Context(), dbgen.UpdateGameAnnotationsParams{
-		ID: id, Abandoned: req.Abandoned, Priority: prio, Notes: req.Notes, Tags: tags,
+		ID: id, UserID: currentUser(r).ID, Abandoned: req.Abandoned, Priority: prio, Notes: req.Notes, Tags: tags,
 	})
 	if err != nil {
 		writeNotFoundOr(w, r, err, "jogo não encontrado")
@@ -463,7 +465,7 @@ func (h *Handlers) patchTrophy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := h.q.UpdateTrophyAnnotations(r.Context(), dbgen.UpdateTrophyAnnotationsParams{
-		ID: id, Priority: prio, Notes: req.Notes, Tags: tags, ServerShutdownRisk: req.ServerShutdownRisk,
+		ID: id, UserID: currentUser(r).ID, Priority: prio, Notes: req.Notes, Tags: tags, ServerShutdownRisk: req.ServerShutdownRisk,
 	})
 	if err != nil {
 		writeNotFoundOr(w, r, err, "troféu não encontrado")

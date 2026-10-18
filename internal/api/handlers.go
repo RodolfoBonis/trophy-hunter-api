@@ -3,6 +3,8 @@
 package api
 
 import (
+	"strings"
+
 	"github.com/redis/go-redis/v9"
 
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai"
@@ -25,6 +27,8 @@ type Handlers struct {
 	ai              *ai.Service
 	rdb             *redis.Client
 	push            *push.Service
+	ownerEmail      string
+	appURL          string
 	logger          *slog.Logger
 	almostThreshold float64
 	authReady       func() bool
@@ -39,7 +43,10 @@ type HandlerDeps struct {
 	AI    *ai.Service
 	Redis *redis.Client
 	// Push envia o teste e expõe a chave pública VAPID (nil/sem chaves = push desligado).
-	Push            *push.Service
+	Push *push.Service
+	// OwnerEmail: e-mail (verificado) que reivindica a conta do dono. AppURL: base dos links de convite.
+	OwnerEmail      string
+	AppURL          string
 	Logger          *slog.Logger
 	AlmostThreshold float64
 	// AuthReady indica se o autenticador já carregou o provider OIDC (readyz). nil = sempre pronto.
@@ -56,6 +63,10 @@ func NewHandlers(d HandlerDeps) *Handlers {
 	if authReady == nil {
 		authReady = func() bool { return true }
 	}
+	appURL := d.AppURL
+	if appURL == "" {
+		appURL = "https://trophy.rodolfodebonis.com.br"
+	}
 	return &Handlers{
 		q:               d.Queries,
 		pool:            d.Pool,
@@ -63,6 +74,8 @@ func NewHandlers(d HandlerDeps) *Handlers {
 		ai:              d.AI,
 		rdb:             d.Redis,
 		push:            d.Push,
+		ownerEmail:      strings.ToLower(strings.TrimSpace(d.OwnerEmail)),
+		appURL:          appURL,
 		logger:          d.Logger,
 		almostThreshold: at,
 		authReady:       authReady,

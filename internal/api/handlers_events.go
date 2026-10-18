@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/httperr"
 )
 
@@ -32,7 +33,7 @@ type unlockEventDTO struct {
 
 // listUnseenUnlocks — GET /events/unseen: troféus desbloqueados ainda não exibidos (mais antigos primeiro).
 func (h *Handlers) listUnseenUnlocks(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.q.ListUnseenUnlocks(r.Context())
+	rows, err := h.q.ListUnseenUnlocks(r.Context(), currentUser(r).ID)
 	if err != nil {
 		writeInternal(w, r, err)
 		return
@@ -71,7 +72,7 @@ func (h *Handlers) markUnlocksSeen(w http.ResponseWriter, r *http.Request) {
 		}
 		ids = append(ids, id)
 	}
-	if _, err := h.q.MarkUnlocksSeen(r.Context(), ids); err != nil {
+	if _, err := h.q.MarkUnlocksSeen(r.Context(), dbgen.MarkUnlocksSeenParams{Ids: ids, UserID: currentUser(r).ID}); err != nil {
 		writeInternal(w, r, err)
 		return
 	}

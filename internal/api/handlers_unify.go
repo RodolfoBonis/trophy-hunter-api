@@ -34,7 +34,7 @@ func (h *Handlers) linkGame(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, r, httperr.Validation("other_game_id inválido", httperr.FieldError{Field: "other_game_id", Code: "invalid"}))
 		return
 	}
-	b, err := h.q.GetGameByID(ctx, otherID)
+	b, err := h.q.GetGameForUser(ctx, dbgen.GetGameForUserParams{ID: otherID, UserID: currentUser(r).ID})
 	if err != nil {
 		writeNotFoundOr(w, r, err, "jogo não encontrado")
 		return
@@ -56,7 +56,7 @@ func (h *Handlers) linkGame(w http.ResponseWriter, r *http.Request) {
 		target = u.ID
 	}
 	for _, g := range []dbgen.Game{a, b} {
-		if err := h.q.SetUnifiedForGameKey(ctx, dbgen.SetUnifiedForGameKeyParams{UnifiedGameID: target, Platform: g.Platform, ExternalID: g.ExternalID}); err != nil {
+		if err := h.q.SetUnifiedForGameKey(ctx, dbgen.SetUnifiedForGameKeyParams{UserID: currentUser(r).ID, UnifiedGameID: target, Platform: g.Platform, ExternalID: g.ExternalID}); err != nil {
 			writeInternal(w, r, err)
 			return
 		}
@@ -70,7 +70,7 @@ func (h *Handlers) unlinkGame(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.q.SetUnifiedForGameKey(r.Context(), dbgen.SetUnifiedForGameKeyParams{Platform: g.Platform, ExternalID: g.ExternalID}); err != nil {
+	if err := h.q.SetUnifiedForGameKey(r.Context(), dbgen.SetUnifiedForGameKeyParams{UserID: currentUser(r).ID, Platform: g.Platform, ExternalID: g.ExternalID}); err != nil {
 		writeInternal(w, r, err)
 		return
 	}
@@ -88,7 +88,7 @@ func (h *Handlers) linkCandidates(w http.ResponseWriter, r *http.Request) {
 		q = g.Title
 	}
 	norm := syncpkg.EscapeLike(syncpkg.NormalizeTitle(q))
-	rows, err := h.q.LinkCandidates(r.Context(), dbgen.LinkCandidatesParams{Platform: g.Platform, Q: norm})
+	rows, err := h.q.LinkCandidates(r.Context(), dbgen.LinkCandidatesParams{UserID: currentUser(r).ID, Platform: g.Platform, Q: norm})
 	if err != nil {
 		writeInternal(w, r, err)
 		return
@@ -110,7 +110,8 @@ func (h *Handlers) loadGameParam(w http.ResponseWriter, r *http.Request) (dbgen.
 		httperr.Write(w, r, httperr.New(httperr.KindBadRequest, "Bad request", "id inválido"))
 		return dbgen.Game{}, false
 	}
-	g, err := h.q.GetGameByID(r.Context(), id)
+	// Jogo do usuário: de outra pessoa responde 404 (sem revelar que existe).
+	g, err := h.q.GetGameForUser(r.Context(), dbgen.GetGameForUserParams{ID: id, UserID: currentUser(r).ID})
 	if err != nil {
 		writeNotFoundOr(w, r, err, "jogo não encontrado")
 		return dbgen.Game{}, false

@@ -97,9 +97,11 @@ type FieldError struct {
 
 // Error é um erro de aplicação com contexto suficiente para virar uma resposta HTTP.
 type Error struct {
-	Kind    Kind
-	Title   string
-	Detail  string
+	Kind   Kind
+	Title  string
+	Detail string
+	// Code é um identificador estável para o cliente reagir (ex.: not_invited). Opcional.
+	Code    string
 	Fields  []FieldError
 	wrapped error
 }
@@ -116,6 +118,12 @@ func (e *Error) Unwrap() error { return e.wrapped }
 // New cria um erro de aplicação.
 func New(kind Kind, title, detail string) *Error {
 	return &Error{Kind: kind, Title: title, Detail: detail}
+}
+
+// WithCode define o código estável do erro (campo `code` do problem+json).
+func (e *Error) WithCode(code string) *Error {
+	e.Code = code
+	return e
 }
 
 // Wrap embrulha um erro existente preservando a cadeia para logs/observabilidade.
@@ -149,6 +157,7 @@ type Problem struct {
 	Detail   string       `json:"detail,omitempty"`
 	Instance string       `json:"instance,omitempty"`
 	TraceID  string       `json:"trace_id,omitempty"`
+	Code     string       `json:"code,omitempty"`
 	Errors   []FieldError `json:"errors,omitempty"`
 }
 
@@ -173,6 +182,7 @@ func Write(w http.ResponseWriter, r *http.Request, err error) {
 		Detail:   detail,
 		Instance: r.URL.Path,
 		TraceID:  traceID(r),
+		Code:     appErr.Code,
 		Errors:   appErr.Fields,
 	}
 

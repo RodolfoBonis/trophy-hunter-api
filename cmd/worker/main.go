@@ -96,7 +96,7 @@ func run() error {
 	}
 	syncer := syncpkg.New(syncpkg.Deps{
 		Queries: queries, Pool: pool, Queue: jobs, Cipher: cipher,
-		SteamFactory: steamFactory, Logger: logger, Notifier: notifier,
+		SteamFactory: steamFactory, Logger: logger, Notifier: notifier, SteamServerKey: cfg.Steam.ServerAPIKey,
 		PSN: psn.New(psn.Options{AuthBaseURL: cfg.PSN.AuthBaseURL, APIBaseURL: cfg.PSN.APIBaseURL, Lang: cfg.PSN.Lang, RPS: cfg.PSN.RPS, Burst: cfg.PSN.Burst, Logger: logger}),
 	})
 

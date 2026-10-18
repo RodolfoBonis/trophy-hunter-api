@@ -13,19 +13,20 @@ import (
 
 const autoLinkUnified = `-- name: AutoLinkUnified :execrows
 WITH keys AS (
-    SELECT g.normalized_title, g.platform, g.external_id, MIN(g.title) AS title, MAX(gp.total) AS total
+    SELECT g.user_id, g.normalized_title, g.platform, g.external_id, MIN(g.title) AS title, MAX(gp.total) AS total
     FROM games g
     JOIN game_progress gp ON gp.id = g.id
     -- Só versões já sincronizadas (troféus baixados) ou sabidamente sem conquistas: antes disso o
     -- total é 0 e passaria como compatível — elas entram num AutoLink seguinte.
     WHERE NOT g.unify_locked AND g.normalized_title <> ''
       AND (g.schema_synced_at IS NOT NULL OR NOT g.has_achievements)
-    GROUP BY g.normalized_title, g.platform, g.external_id
+    GROUP BY g.user_id, g.normalized_title, g.platform, g.external_id
 ),
 linked AS (
-    SELECT DISTINCT a.normalized_title, a.platform, a.external_id, a.title
+    -- Vínculo só entre jogos da MESMA pessoa.
+    SELECT DISTINCT a.user_id, a.normalized_title, a.platform, a.external_id, a.title
     FROM keys a
-    JOIN keys b ON b.normalized_title = a.normalized_title AND b.platform <> a.platform
+    JOIN keys b ON b.user_id = a.user_id AND b.normalized_title = a.normalized_title AND b.platform <> a.platform
     WHERE a.total = 0 OR b.total = 0
        OR abs(a.total - b.total) <= 5
        OR abs(a.total - b.total)::float8 / greatest(a.total, b.total) <= 0.25
@@ -42,7 +43,7 @@ ins AS (
 UPDATE games g SET unified_game_id = ins.id, updated_at = now()
 FROM ins
 JOIN linked l ON l.normalized_title = ins.normalized_title
-WHERE g.platform = l.platform AND g.external_id = l.external_id AND NOT g.unify_locked
+WHERE g.user_id = l.user_id AND g.platform = l.platform AND g.external_id = l.external_id AND NOT g.unify_locked
   AND g.unified_game_id IS DISTINCT FROM ins.id
 `
 
@@ -87,11 +88,12 @@ const crossPlatformSiblings = `-- name: CrossPlatformSiblings :many
 SELECT b.id, b.platform, b.external_id, b.title, b.cover, b.hero, b.total, b.earned, b.completion_pct, b.last_unlock_at
 FROM best_games b
 JOIN games g ON g.id = b.id
-WHERE g.unified_game_id = $1 AND b.platform <> $2
+WHERE b.user_id = $1::uuid AND g.unified_game_id = $2 AND b.platform <> $3
 ORDER BY b.platform, b.completion_pct DESC
 `
 
 type CrossPlatformSiblingsParams struct {
+	UserID        pgtype.UUID
 	UnifiedGameID pgtype.UUID
 	Platform      string
 }
@@ -111,7 +113,7 @@ type CrossPlatformSiblingsRow struct {
 
 // O mesmo jogo nas OUTRAS plataformas (conta mais avançada de cada uma), para o lado a lado.
 func (q *Queries) CrossPlatformSiblings(ctx context.Context, arg CrossPlatformSiblingsParams) ([]CrossPlatformSiblingsRow, error) {
-	rows, err := q.db.Query(ctx, crossPlatformSiblings, arg.UnifiedGameID, arg.Platform)
+	rows, err := q.db.Query(ctx, crossPlatformSiblings, arg.UserID, arg.UnifiedGameID, arg.Platform)
 	if err != nil {
 		return nil, err
 	}
@@ -145,12 +147,13 @@ const linkCandidates = `-- name: LinkCandidates :many
 SELECT b.id, b.platform, b.external_id, b.title, b.cover, b.hero, b.total, b.earned, b.completion_pct, b.last_unlock_at
 FROM best_games b
 JOIN games g ON g.id = b.id
-WHERE b.platform <> $1 AND g.normalized_title ILIKE '%' || $2::text || '%' ESCAPE '\'
-ORDER BY similarity(g.normalized_title, $2::text) DESC, b.title
+WHERE b.user_id = $1::uuid AND b.platform <> $2 AND g.normalized_title ILIKE '%' || $3::text || '%' ESCAPE '\'
+ORDER BY similarity(g.normalized_title, $3::text) DESC, b.title
 LIMIT 10
 `
 
 type LinkCandidatesParams struct {
+	UserID   pgtype.UUID
 	Platform string
 	Q        string
 }
@@ -170,7 +173,7 @@ type LinkCandidatesRow struct {
 
 // Jogos da OUTRA plataforma para vincular manualmente (busca por título).
 func (q *Queries) LinkCandidates(ctx context.Context, arg LinkCandidatesParams) ([]LinkCandidatesRow, error) {
-	rows, err := q.db.Query(ctx, linkCandidates, arg.Platform, arg.Q)
+	rows, err := q.db.Query(ctx, linkCandidates, arg.UserID, arg.Platform, arg.Q)
 	if err != nil {
 		return nil, err
 	}
@@ -202,11 +205,12 @@ func (q *Queries) LinkCandidates(ctx context.Context, arg LinkCandidatesParams) 
 
 const setUnifiedForGameKey = `-- name: SetUnifiedForGameKey :exec
 UPDATE games SET unified_game_id = $1::uuid, unify_locked = true, updated_at = now()
-WHERE platform = $2 AND external_id = $3
+WHERE user_id = $2::uuid AND platform = $3 AND external_id = $4
 `
 
 type SetUnifiedForGameKeyParams struct {
 	UnifiedGameID pgtype.UUID
+	UserID        pgtype.UUID
 	Platform      string
 	ExternalID    string
 }
@@ -214,6 +218,11 @@ type SetUnifiedForGameKeyParams struct {
 // Aplica (ou remove, com NULL) o vínculo a TODAS as contas que têm o jogo (platform+external_id) e
 // trava a decisão do usuário.
 func (q *Queries) SetUnifiedForGameKey(ctx context.Context, arg SetUnifiedForGameKeyParams) error {
-	_, err := q.db.Exec(ctx, setUnifiedForGameKey, arg.UnifiedGameID, arg.Platform, arg.ExternalID)
+	_, err := q.db.Exec(ctx, setUnifiedForGameKey,
+		arg.UnifiedGameID,
+		arg.UserID,
+		arg.Platform,
+		arg.ExternalID,
+	)
 	return err
 }

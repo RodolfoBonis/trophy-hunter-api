@@ -45,11 +45,14 @@ const (
 
 // Payload é o conteúdo do job `notify`. Para KindUnlocks título/corpo são calculados no envio.
 type Payload struct {
-	Kind  Kind   `json:"kind"`
-	Title string `json:"title,omitempty"`
-	Body  string `json:"body,omitempty"`
-	URL   string `json:"url,omitempty"`
-	Tag   string `json:"tag,omitempty"`
+	// UserID: de quem é a notificação (vai só para os aparelhos dessa pessoa). Vazio em
+	// KindUnlocks = todos os desbloqueios pendentes, cada um para o seu dono.
+	UserID string `json:"user_id,omitempty"`
+	Kind   Kind   `json:"kind"`
+	Title  string `json:"title,omitempty"`
+	Body   string `json:"body,omitempty"`
+	URL    string `json:"url,omitempty"`
+	Tag    string `json:"tag,omitempty"`
 }
 
 // Message é o JSON entregue ao service worker (ver src/sw/service-worker.ts no web).
@@ -136,13 +139,13 @@ type Result struct {
 	Sent, Failed, Removed int
 }
 
-// Send entrega msg a todas as inscrições (sem checar preferências — use Notify).
-func (s *Service) Send(ctx context.Context, msg Message) (Result, error) {
+// Send entrega msg a todos os aparelhos do usuário (sem checar preferências — use Notify).
+func (s *Service) Send(ctx context.Context, userID pgtype.UUID, msg Message) (Result, error) {
 	var r Result
 	if !s.Enabled() {
 		return r, nil
 	}
-	subs, err := s.q.ListPushSubscriptions(ctx)
+	subs, err := s.q.ListPushSubscriptions(ctx, userID)
 	if err != nil {
 		return r, err
 	}
@@ -180,9 +183,9 @@ func (s *Service) Send(ctx context.Context, msg Message) (Result, error) {
 }
 
 // Notify entrega se o usuário quer este tipo de notificação.
-func (s *Service) Notify(ctx context.Context, msg Message) (Result, error) {
+func (s *Service) Notify(ctx context.Context, userID pgtype.UUID, msg Message) (Result, error) {
 	if msg.Kind != KindTest {
-		prefs, err := LoadPreferences(ctx, s.q)
+		prefs, err := LoadPreferences(ctx, s.q, userID)
 		if err != nil {
 			return Result{}, err
 		}
@@ -190,7 +193,7 @@ func (s *Service) Notify(ctx context.Context, msg Message) (Result, error) {
 			return Result{}, nil
 		}
 	}
-	return s.Send(ctx, msg)
+	return s.Send(ctx, userID, msg)
 }
 
 // HandleJob processa um job `notify` (chamado pelo worker de sync).
@@ -205,7 +208,11 @@ func (s *Service) HandleJob(ctx context.Context, job queue.Job) error {
 	if p.Kind == KindUnlocks {
 		return s.sendUnlocks(ctx)
 	}
-	_, err := s.Notify(ctx, Message{Title: p.Title, Body: p.Body, URL: p.URL, Tag: p.Tag, Kind: p.Kind})
+	var uid pgtype.UUID
+	if err := uid.Scan(p.UserID); err != nil {
+		return queue.Permanent(fmt.Errorf("notify sem user_id válido: %w", err))
+	}
+	_, err := s.Notify(ctx, uid, Message{Title: p.Title, Body: p.Body, URL: p.URL, Tag: p.Tag, Kind: p.Kind})
 	return err
 }
 
@@ -218,20 +225,33 @@ func (s *Service) sendUnlocks(ctx context.Context) error {
 		return err
 	}
 	ids := make([]pgtype.UUID, 0, len(rows))
-	var completions, others []dbgen.ListUnpushedUnlocksRow
+	type batch struct {
+		completions, others []dbgen.ListUnpushedUnlocksRow
+	}
+	byUser := map[pgtype.UUID]*batch{}
+	var order []pgtype.UUID
 	seen := map[pgtype.UUID]bool{}
 	for _, r := range rows {
 		ids = append(ids, r.ID)
+		b := byUser[r.UserID]
+		if b == nil {
+			b = &batch{}
+			byUser[r.UserID] = b
+			order = append(order, r.UserID)
+		}
 		if r.CompletesGame && !seen[r.GameID] {
 			seen[r.GameID] = true
-			completions = append(completions, r)
+			b.completions = append(b.completions, r)
 			continue
 		}
-		others = append(others, r)
+		b.others = append(b.others, r)
 	}
-	for _, m := range unlockMessages(completions, others) {
-		if _, err := s.Notify(ctx, m); err != nil {
-			return err
+	for _, uid := range order {
+		b := byUser[uid]
+		for _, m := range unlockMessages(b.completions, b.others) {
+			if _, err := s.Notify(ctx, uid, m); err != nil {
+				return err
+			}
 		}
 	}
 	return s.q.MarkUnlocksPushed(ctx, ids)
@@ -304,8 +324,8 @@ func uuidString(u pgtype.UUID) string {
 
 /* ── Preferências ──────────────────────────────────────────────────────────────────────── */
 
-// SettingsKey é a chave das preferências em `settings`.
-const SettingsKey = "notifications"
+// settingsKey é a chave das preferências do usuário em `settings`.
+func settingsKey(userID pgtype.UUID) string { return "notifications:" + uuidString(userID) }
 
 // Preferences liga/desliga cada tipo de notificação.
 type Preferences struct {
@@ -337,9 +357,9 @@ func (p Preferences) Allows(k Kind) bool {
 }
 
 // LoadPreferences lê as preferências (padrão quando ainda não salvas).
-func LoadPreferences(ctx context.Context, q *dbgen.Queries) (Preferences, error) {
+func LoadPreferences(ctx context.Context, q *dbgen.Queries, userID pgtype.UUID) (Preferences, error) {
 	p := DefaultPreferences()
-	raw, err := q.GetSetting(ctx, SettingsKey)
+	raw, err := q.GetSetting(ctx, settingsKey(userID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, nil
 	}
@@ -353,10 +373,13 @@ func LoadPreferences(ctx context.Context, q *dbgen.Queries) (Preferences, error)
 }
 
 // SavePreferences grava as preferências.
-func SavePreferences(ctx context.Context, q *dbgen.Queries, p Preferences) error {
+func SavePreferences(ctx context.Context, q *dbgen.Queries, userID pgtype.UUID, p Preferences) error {
 	raw, err := json.Marshal(p)
 	if err != nil {
 		return err
 	}
-	return q.UpsertSetting(ctx, dbgen.UpsertSettingParams{Key: SettingsKey, Value: raw})
+	return q.UpsertSetting(ctx, dbgen.UpsertSettingParams{Key: settingsKey(userID), Value: raw})
 }
+
+// UserIDString formata o uuid do usuário para o Payload.
+func UserIDString(u pgtype.UUID) string { return uuidString(u) }

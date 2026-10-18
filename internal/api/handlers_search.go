@@ -54,7 +54,7 @@ func (h *Handlers) search(w http.ResponseWriter, r *http.Request) {
 	var games []dbgen.SearchGamesRow
 	if norm := syncpkg.NormalizeTitle(q); norm != "" {
 		var err error
-		if games, err = h.q.SearchGames(ctx, syncpkg.EscapeLike(norm)); err != nil {
+		if games, err = h.q.SearchGames(ctx, dbgen.SearchGamesParams{UserID: currentUser(r).ID, Q: syncpkg.EscapeLike(norm)}); err != nil {
 			writeInternal(w, r, err)
 			return
 		}
@@ -65,7 +65,7 @@ func (h *Handlers) search(w http.ResponseWriter, r *http.Request) {
 			Cover: g.Cover, Hero: g.Hero, CompletionPct: g.CompletionPct,
 		})
 	}
-	trophies, err := h.q.SearchTrophies(ctx, syncpkg.EscapeLike(q))
+	trophies, err := h.q.SearchTrophies(ctx, dbgen.SearchTrophiesParams{UserID: currentUser(r).ID, Q: syncpkg.EscapeLike(q)})
 	if err != nil {
 		writeInternal(w, r, err)
 		return

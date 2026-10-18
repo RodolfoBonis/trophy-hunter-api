@@ -84,6 +84,7 @@ func (a *Authenticator) Ready() bool {
 // userClaims captura os claims emitidos pelo Keycloak.
 type userClaims struct {
 	Email             string `json:"email"`
+	EmailVerified     bool   `json:"email_verified"`
 	Name              string `json:"name"`
 	PreferredUsername string `json:"preferred_username"`
 	RealmAccess       struct {
@@ -130,7 +131,8 @@ func (a *Authenticator) authenticate(r *http.Request) (UserContext, error) {
 			return UserContext{}, httperr.New(httperr.KindUnauthorized, "Unauthorized",
 				"defina X-Debug-User no modo dev")
 		}
-		return UserContext{Subject: sub, Email: r.Header.Get("X-Debug-Email"), Name: r.Header.Get("X-Debug-Name")}, nil
+		email := r.Header.Get("X-Debug-Email")
+		return UserContext{Issuer: "dev", Subject: sub, Email: email, EmailVerified: email != "", Name: r.Header.Get("X-Debug-Name")}, nil
 	}
 
 	verifier := a.verifier.Load()
@@ -156,7 +158,10 @@ func (a *Authenticator) authenticate(r *http.Request) (UserContext, error) {
 		return UserContext{}, httperr.New(httperr.KindForbidden, "Forbidden",
 			"o token não possui a role exigida")
 	}
-	return UserContext{Subject: idToken.Subject, Email: claims.Email, Name: claims.displayName()}, nil
+	return UserContext{
+		Issuer: idToken.Issuer, Subject: idToken.Subject, Email: claims.Email,
+		EmailVerified: claims.EmailVerified, Name: claims.displayName(),
+	}, nil
 }
 
 // logAuthFailure registra 401/403 em nível info com o motivo (NUNCA o token).

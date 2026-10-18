@@ -22,7 +22,7 @@ SELECT e.id, e.detected_at,
 FROM unlock_events e
 JOIN trophies t ON t.id = e.trophy_id
 JOIN games g ON g.id = t.game_id
-WHERE e.seen_at IS NULL
+WHERE g.user_id = $1::uuid AND e.seen_at IS NULL
 ORDER BY e.detected_at, t.earned_at NULLS LAST, e.id
 LIMIT 100
 `
@@ -49,8 +49,8 @@ type ListUnseenUnlocksRow struct {
 // Eventos de desbloqueio (unlock_events): fonte dos avisos de troféu e da cerimônia de platina.
 // Desbloqueios ainda não exibidos, mais antigos primeiro. completes_game = o troféu fechou o jogo
 // (PSN: é a platina; Steam: com ele, não falta nenhuma conquista).
-func (q *Queries) ListUnseenUnlocks(ctx context.Context) ([]ListUnseenUnlocksRow, error) {
-	rows, err := q.db.Query(ctx, listUnseenUnlocks)
+func (q *Queries) ListUnseenUnlocks(ctx context.Context, userID pgtype.UUID) ([]ListUnseenUnlocksRow, error) {
+	rows, err := q.db.Query(ctx, listUnseenUnlocks, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -87,11 +87,18 @@ func (q *Queries) ListUnseenUnlocks(ctx context.Context) ([]ListUnseenUnlocksRow
 }
 
 const markUnlocksSeen = `-- name: MarkUnlocksSeen :execrows
-UPDATE unlock_events SET seen_at = now() WHERE id = ANY($1::uuid[]) AND seen_at IS NULL
+UPDATE unlock_events SET seen_at = now()
+WHERE id = ANY($1::uuid[]) AND seen_at IS NULL
+  AND trophy_id IN (SELECT t.id FROM trophies t JOIN games g ON g.id = t.game_id WHERE g.user_id = $2::uuid)
 `
 
-func (q *Queries) MarkUnlocksSeen(ctx context.Context, ids []pgtype.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, markUnlocksSeen, ids)
+type MarkUnlocksSeenParams struct {
+	Ids    []pgtype.UUID
+	UserID pgtype.UUID
+}
+
+func (q *Queries) MarkUnlocksSeen(ctx context.Context, arg MarkUnlocksSeenParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markUnlocksSeen, arg.Ids, arg.UserID)
 	if err != nil {
 		return 0, err
 	}

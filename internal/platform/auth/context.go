@@ -7,9 +7,14 @@ import "context"
 //
 // O app é single-user: o Subject é usado para logs/auditoria, não para particionar dados.
 type UserContext struct {
+	// Issuer + Subject identificam a pessoa no IdP (o mesmo sub em realms diferentes é outra pessoa).
+	Issuer  string
 	Subject string
 	Email   string
-	Name    string
+	// EmailVerified: o IdP garante o e-mail (Google, ou verificação do Keycloak). Só um e-mail
+	// verificado pode reivindicar a conta do dono.
+	EmailVerified bool
+	Name          string
 }
 
 type userCtxKey struct{}

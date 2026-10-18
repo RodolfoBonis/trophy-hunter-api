@@ -22,6 +22,11 @@ tags:
   - name: sync
   - name: push
     description: Web push (VAPID) e preferências de notificação.
+  - name: admin
+    description: >
+      Multiusuário — convites e membros (só o dono). Cada pessoa vê apenas os próprios dados; recursos
+      de outra pessoa respondem 404. Guias de troféu são compartilhados (edição privada); roadmap e
+      chat são de cada um. Membros têm teto diário de IA (429 code ai_daily_limit).
   - name: ai
     description: >
       Guias por troféu, roadmap de platina e chat por jogo, gerados por IA (Claude Code headless no
@@ -791,6 +796,97 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
 
+  /invites/{code}/accept:
+    post:
+      tags: [me]
+      operationId: acceptInvite
+      summary: Aceita um convite — quem logou e está "pending" vira membro.
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Membro ativo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /admin/invites:
+    post:
+      tags: [admin]
+      operationId: createInvite
+      summary: Cria um link de convite (uso único, válido por 7 dias). Só o dono.
+      responses:
+        "201":
+          description: Convite criado (url só aparece aqui)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invite" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    get:
+      tags: [admin]
+      operationId: listInvites
+      summary: Convites ainda válidos. Só o dono.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Invite" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /admin/invites/{id}:
+    delete:
+      tags: [admin]
+      operationId: revokeInvite
+      summary: Revoga um convite. Só o dono.
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+      responses:
+        "204": { description: Revogado }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /admin/members:
+    get:
+      tags: [admin]
+      operationId: listMembers
+      summary: Quem já entrou (ativos e removidos), dono primeiro. Só o dono.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Member" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /admin/members/{id}:
+    delete:
+      tags: [admin]
+      operationId: removeMember
+      summary: Revoga o acesso de um membro; com purge=true apaga a pessoa e todos os dados dela.
+      parameters:
+        - $ref: "#/components/parameters/GameIDPath"
+        - name: purge
+          in: query
+          schema: { type: boolean }
+      responses:
+        "204": { description: Removido }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1005,11 +1101,39 @@ components:
       enum: [full, incremental]
     User:
       type: object
-      required: [subject]
+      description: >
+        Usuário do app. status pending = logou mas ainda não aceitou convite (só /me e o aceite
+        funcionam; o resto responde 403 code not_invited); removed = acesso revogado pelo dono.
+      required: [id, subject, email, name, role, status]
       properties:
+        id: { type: string, format: uuid }
         subject: { type: string }
         email: { type: string }
         name: { type: string }
+        role: { type: string, enum: [owner, member] }
+        status: { type: string, enum: [pending, active, removed] }
+    Invite:
+      type: object
+      required: [id, expires_at, max_uses, used_count, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        expires_at: { type: [string, "null"], format: date-time }
+        max_uses: { type: integer }
+        used_count: { type: integer }
+        created_at: { type: [string, "null"], format: date-time }
+        url: { type: string, description: "Link do convite — só na criação (o código não fica guardado)." }
+    Member:
+      type: object
+      required: [id, email, name, role, status, accounts, last_seen_at, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        name: { type: string }
+        role: { type: string, enum: [owner, member] }
+        status: { type: string, enum: [pending, active, removed] }
+        accounts: { type: integer, description: "Contas Steam/PSN conectadas." }
+        last_seen_at: { type: [string, "null"], format: date-time }
+        created_at: { type: [string, "null"], format: date-time }
     Integration:
       type: object
       required: [id, platform, label, status]
@@ -1034,8 +1158,9 @@ components:
         api_key:
           type: string
           description: >
-            Steam Web API key (https://steamcommunity.com/dev/apikey). Obrigatória só na primeira
-            conta Steam; nas seguintes, omitida → reaproveita a key existente. Nunca é retornada.
+            Steam Web API key (https://steamcommunity.com/dev/apikey). Opcional: omitida → usa a key de
+            outra conta Steam da mesma pessoa ou a key do servidor (basta informar o perfil). Nunca é
+            retornada.
         steam_id_or_vanity:
           type: string
           description: SteamID64 (17 dígitos) ou a vanity URL (nome do perfil).
@@ -1474,6 +1599,11 @@ components:
         detail: { type: string }
         instance: { type: string }
         trace_id: { type: string }
+        code:
+          type: string
+          description: >
+            Código estável para a UI reagir: not_invited (sem convite aceito), member_removed (acesso
+            revogado), invite_invalid, ai_daily_limit (teto diário de IA do membro).
         errors:
           type: array
           items:

@@ -1,5 +1,10 @@
 -- name: GetGameByID :one
+-- Uso interno (workers). A API usa GetGameForUser.
 SELECT * FROM games WHERE id = $1;
+
+-- name: GetGameForUser :one
+-- Jogo do usuário; de outra pessoa = sem linha (a API responde 404, sem revelar que existe).
+SELECT * FROM games WHERE id = $1 AND user_id = $2;
 
 -- name: GetGameByExternal :one
 SELECT * FROM games WHERE integration_id = $1 AND external_id = $2;
@@ -18,9 +23,10 @@ SELECT * FROM games WHERE integration_id = $1 AND external_id = $2;
 -- Em INSERT (jogo novo), has_achievements vem do parâmetro (has_community_visible_stats).
 INSERT INTO games (
     integration_id, platform, external_id, np_service_name, title, normalized_title, icon, cover,
-    hero, platforms, has_achievements, last_played_at, playtime_minutes, updated_at
+    hero, platforms, has_achievements, last_played_at, playtime_minutes, user_id, updated_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now()
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+    (SELECT i.user_id FROM integrations i WHERE i.id = $1), now()
 )
 ON CONFLICT (integration_id, external_id) DO UPDATE SET
     np_service_name   = EXCLUDED.np_service_name,
@@ -81,7 +87,8 @@ WITH agg AS (
     FROM games g
     JOIN integrations i ON i.id = g.integration_id
     LEFT JOIN trophies t ON t.game_id = g.id
-    WHERE (sqlc.narg(integration_id)::uuid IS NULL OR g.integration_id = sqlc.narg(integration_id)::uuid)
+    WHERE g.user_id = sqlc.arg(user_id)::uuid
+      AND (sqlc.narg(integration_id)::uuid IS NULL OR g.integration_id = sqlc.narg(integration_id)::uuid)
       AND (sqlc.narg(platform)::text IS NULL OR g.platform = sqlc.narg(platform)::text)
     GROUP BY g.id, i.label
 ),
@@ -131,7 +138,8 @@ WITH agg AS (
         MAX(t.earned_at)::timestamptz       AS last_unlock_at
     FROM games g
     LEFT JOIN trophies t ON t.game_id = g.id
-    WHERE (sqlc.narg(integration_id)::uuid IS NULL OR g.integration_id = sqlc.narg(integration_id)::uuid)
+    WHERE g.user_id = sqlc.arg(user_id)::uuid
+      AND (sqlc.narg(integration_id)::uuid IS NULL OR g.integration_id = sqlc.narg(integration_id)::uuid)
       AND (sqlc.narg(platform)::text IS NULL OR g.platform = sqlc.narg(platform)::text)
     GROUP BY g.id
 ),
@@ -172,7 +180,7 @@ WITH agg AS (
     FROM games g
     JOIN integrations i ON i.id = g.integration_id
     LEFT JOIN trophies t ON t.game_id = g.id
-    WHERE (g.platform || ':' || g.external_id) = ANY(sqlc.arg(keys)::text[])
+    WHERE g.user_id = sqlc.arg(user_id)::uuid AND (g.platform || ':' || g.external_id) = ANY(sqlc.arg(keys)::text[])
     GROUP BY g.id, i.label, i.display_name
 )
 SELECT *,

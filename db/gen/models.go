@@ -16,17 +16,32 @@ type AiGuide struct {
 	TrophyExternalID string
 	Status           string
 	Content          []byte
-	EditedContent    []byte
 	SchemaVersion    int32
 	Model            string
 	Error            string
 	GeneratedAt      pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
+	UserID           pgtype.UUID
+}
+
+type AiGuideEdit struct {
+	UserID    pgtype.UUID
+	GuideID   pgtype.UUID
+	Content   []byte
+	UpdatedAt pgtype.Timestamptz
+}
+
+type AiRequest struct {
+	ID        pgtype.UUID
+	UserID    pgtype.UUID
+	Kind      string
+	CreatedAt pgtype.Timestamptz
 }
 
 type BestGame struct {
 	ID              pgtype.UUID
+	UserID          pgtype.UUID
 	IntegrationID   pgtype.UUID
 	Platform        string
 	ExternalID      string
@@ -64,6 +79,7 @@ type ChatThread struct {
 	Archived        bool
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
+	UserID          pgtype.UUID
 }
 
 type Game struct {
@@ -93,10 +109,12 @@ type Game struct {
 	IntegrationID       pgtype.UUID
 	Hero                string
 	UnifyLocked         bool
+	UserID              pgtype.UUID
 }
 
 type GameProgress struct {
 	ID              pgtype.UUID
+	UserID          pgtype.UUID
 	IntegrationID   pgtype.UUID
 	Platform        string
 	ExternalID      string
@@ -133,6 +151,18 @@ type Integration struct {
 	Label                 string
 	NotifiedStatus        string
 	NotifiedAt            pgtype.Timestamptz
+	UserID                pgtype.UUID
+}
+
+type Invite struct {
+	ID        pgtype.UUID
+	CodeHash  string
+	CreatedBy pgtype.UUID
+	ExpiresAt pgtype.Timestamptz
+	MaxUses   int32
+	UsedCount int32
+	RevokedAt pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
 }
 
 type Job struct {
@@ -161,6 +191,7 @@ type PushSubscription struct {
 	LastSuccessAt pgtype.Timestamptz
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
+	UserID        pgtype.UUID
 }
 
 type Setting struct {
@@ -240,4 +271,18 @@ type UnlockEvent struct {
 	SeenAt     pgtype.Timestamptz
 	PushedAt   pgtype.Timestamptz
 	CreatedAt  pgtype.Timestamptz
+}
+
+type User struct {
+	ID         pgtype.UUID
+	Issuer     string
+	Subject    *string
+	Email      string
+	Name       string
+	Role       string
+	Status     string
+	InvitedBy  pgtype.UUID
+	LastSeenAt pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
 }

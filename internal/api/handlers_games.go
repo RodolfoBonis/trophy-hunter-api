@@ -99,7 +99,7 @@ func (h *Handlers) listGames(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	rows, err := h.q.ListGames(ctx, dbgen.ListGamesParams{
-		Platform: platform, HasAchievements: hasAch, Q: search, Status: status, IntegrationID: integrationID,
+		UserID: currentUser(r).ID, Platform: platform, HasAchievements: hasAch, Q: search, Status: status, IntegrationID: integrationID,
 		Sort: sort, Lim: int32(limit), Off: int32(offset), Almost: h.almostThreshold, //nolint:gosec // valores clampados
 	})
 	if err != nil {
@@ -107,7 +107,7 @@ func (h *Handlers) listGames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	total, err := h.q.CountGames(ctx, dbgen.CountGamesParams{
-		Platform: platform, HasAchievements: hasAch, Q: search, Status: status, IntegrationID: integrationID,
+		UserID: currentUser(r).ID, Platform: platform, HasAchievements: hasAch, Q: search, Status: status, IntegrationID: integrationID,
 		Almost: h.almostThreshold,
 	})
 	if err != nil {
@@ -121,7 +121,7 @@ func (h *Handlers) listGames(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		keys = append(keys, gameKey(row.Platform, row.ExternalID))
 	}
-	accounts, err := h.gameAccounts(ctx, keys)
+	accounts, err := h.gameAccounts(ctx, currentUser(r).ID, keys)
 	if err != nil {
 		httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
 		return
@@ -145,7 +145,7 @@ func (h *Handlers) getGame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	game, err := h.q.GetGameByID(ctx, gameUUID)
+	game, err := h.q.GetGameForUser(ctx, dbgen.GetGameForUserParams{ID: gameUUID, UserID: currentUser(r).ID})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			httperr.Write(w, r, httperr.New(httperr.KindNotFound, "Not found", "jogo não encontrado"))
@@ -199,7 +199,7 @@ func (h *Handlers) getGame(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
 		return
 	}
-	accounts, err := h.gameAccounts(ctx, []string{gameKey(game.Platform, game.ExternalID)})
+	accounts, err := h.gameAccounts(ctx, currentUser(r).ID, []string{gameKey(game.Platform, game.ExternalID)})
 	if err != nil {
 		httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
 		return
@@ -207,7 +207,7 @@ func (h *Handlers) getGame(w http.ResponseWriter, r *http.Request) {
 
 	cross := []crossPlatformDTO{}
 	if game.UnifiedGameID.Valid {
-		sibs, err := h.q.CrossPlatformSiblings(ctx, dbgen.CrossPlatformSiblingsParams{UnifiedGameID: game.UnifiedGameID, Platform: game.Platform})
+		sibs, err := h.q.CrossPlatformSiblings(ctx, dbgen.CrossPlatformSiblingsParams{UserID: currentUser(r).ID, UnifiedGameID: game.UnifiedGameID, Platform: game.Platform})
 		if err != nil {
 			httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
 			return
@@ -249,12 +249,12 @@ func gameKey(platform, externalID string) string { return platform + ":" + exter
 
 // gameAccounts carrega, numa query, as contas que possuem cada jogo (chave → contas, mais avançada
 // primeiro).
-func (h *Handlers) gameAccounts(ctx context.Context, keys []string) (map[string][]dbgen.ListGameAccountsRow, error) {
+func (h *Handlers) gameAccounts(ctx context.Context, userID pgtype.UUID, keys []string) (map[string][]dbgen.ListGameAccountsRow, error) {
 	out := make(map[string][]dbgen.ListGameAccountsRow, len(keys))
 	if len(keys) == 0 {
 		return out, nil
 	}
-	rows, err := h.q.ListGameAccounts(ctx, dbgen.ListGameAccountsParams{Keys: keys, Almost: h.almostThreshold})
+	rows, err := h.q.ListGameAccounts(ctx, dbgen.ListGameAccountsParams{UserID: userID, Keys: keys, Almost: h.almostThreshold})
 	if err != nil {
 		return nil, err
 	}

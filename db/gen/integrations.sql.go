@@ -14,11 +14,11 @@ import (
 const createIntegration = `-- name: CreateIntegration :one
 INSERT INTO integrations (
     platform, label, status, account_id, display_name, avatar, credentials_enc, key_version,
-    last_error, initial_sync_done, updated_at
+    last_error, initial_sync_done, user_id, updated_at
 ) VALUES (
-    $1, $2, 'connected', $3, $4, $5, $6, $7, '', false, now()
+    $1, $2, 'connected', $3, $4, $5, $6, $7, '', false, $8, now()
 )
-RETURNING id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at
+RETURNING id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at, user_id
 `
 
 type CreateIntegrationParams struct {
@@ -29,6 +29,7 @@ type CreateIntegrationParams struct {
 	Avatar         string
 	CredentialsEnc []byte
 	KeyVersion     int32
+	UserID         pgtype.UUID
 }
 
 // Cria a conexão com uma conta gravando as credenciais cifradas e a identidade da conta.
@@ -42,6 +43,7 @@ func (q *Queries) CreateIntegration(ctx context.Context, arg CreateIntegrationPa
 		arg.Avatar,
 		arg.CredentialsEnc,
 		arg.KeyVersion,
+		arg.UserID,
 	)
 	var i Integration
 	err := row.Scan(
@@ -63,6 +65,7 @@ func (q *Queries) CreateIntegration(ctx context.Context, arg CreateIntegrationPa
 		&i.Label,
 		&i.NotifiedStatus,
 		&i.NotifiedAt,
+		&i.UserID,
 	)
 	return i, err
 }
@@ -79,10 +82,11 @@ func (q *Queries) DeleteIntegration(ctx context.Context, id pgtype.UUID) error {
 
 const getIntegration = `-- name: GetIntegration :one
 
-SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at FROM integrations WHERE id = $1
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at, user_id FROM integrations WHERE id = $1
 `
 
 // Integrações: várias contas por plataforma (ver migration 00013). Tudo é endereçado pelo id.
+// Uso interno (workers). A API usa GetIntegrationForUser.
 func (q *Queries) GetIntegration(ctx context.Context, id pgtype.UUID) (Integration, error) {
 	row := q.db.QueryRow(ctx, getIntegration, id)
 	var i Integration
@@ -105,12 +109,13 @@ func (q *Queries) GetIntegration(ctx context.Context, id pgtype.UUID) (Integrati
 		&i.Label,
 		&i.NotifiedStatus,
 		&i.NotifiedAt,
+		&i.UserID,
 	)
 	return i, err
 }
 
 const getIntegrationByAccount = `-- name: GetIntegrationByAccount :one
-SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at FROM integrations WHERE platform = $1 AND account_id = $2
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at, user_id FROM integrations WHERE platform = $1 AND account_id = $2
 `
 
 type GetIntegrationByAccountParams struct {
@@ -140,14 +145,95 @@ func (q *Queries) GetIntegrationByAccount(ctx context.Context, arg GetIntegratio
 		&i.Label,
 		&i.NotifiedStatus,
 		&i.NotifiedAt,
+		&i.UserID,
 	)
 	return i, err
 }
 
-const listIntegrations = `-- name: ListIntegrations :many
-SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at FROM integrations ORDER BY platform, created_at
+const getIntegrationForUser = `-- name: GetIntegrationForUser :one
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at, user_id FROM integrations WHERE id = $1 AND user_id = $2
 `
 
+type GetIntegrationForUserParams struct {
+	ID     pgtype.UUID
+	UserID pgtype.UUID
+}
+
+func (q *Queries) GetIntegrationForUser(ctx context.Context, arg GetIntegrationForUserParams) (Integration, error) {
+	row := q.db.QueryRow(ctx, getIntegrationForUser, arg.ID, arg.UserID)
+	var i Integration
+	err := row.Scan(
+		&i.ID,
+		&i.Platform,
+		&i.Status,
+		&i.AccountID,
+		&i.DisplayName,
+		&i.Avatar,
+		&i.CredentialsEnc,
+		&i.KeyVersion,
+		&i.AccessTokenExpiresAt,
+		&i.RefreshTokenExpiresAt,
+		&i.LastError,
+		&i.LastSyncedAt,
+		&i.InitialSyncDone,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Label,
+		&i.NotifiedStatus,
+		&i.NotifiedAt,
+		&i.UserID,
+	)
+	return i, err
+}
+
+const listAccountsForMetrics = `-- name: ListAccountsForMetrics :many
+SELECT i.platform, i.label, i.status, i.last_synced_at, u.name AS owner_name, u.email AS owner_email
+FROM integrations i JOIN users u ON u.id = i.user_id
+ORDER BY u.created_at, i.platform, i.created_at
+`
+
+type ListAccountsForMetricsRow struct {
+	Platform     string
+	Label        string
+	Status       string
+	LastSyncedAt pgtype.Timestamptz
+	OwnerName    string
+	OwnerEmail   string
+}
+
+// Contas com o nome do dono (rótulo "pessoa/conta" nas métricas).
+func (q *Queries) ListAccountsForMetrics(ctx context.Context) ([]ListAccountsForMetricsRow, error) {
+	rows, err := q.db.Query(ctx, listAccountsForMetrics)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAccountsForMetricsRow{}
+	for rows.Next() {
+		var i ListAccountsForMetricsRow
+		if err := rows.Scan(
+			&i.Platform,
+			&i.Label,
+			&i.Status,
+			&i.LastSyncedAt,
+			&i.OwnerName,
+			&i.OwnerEmail,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIntegrations = `-- name: ListIntegrations :many
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at, user_id FROM integrations ORDER BY platform, created_at
+`
+
+// Todas as contas de todos os usuários (scheduler, métricas). A API usa ListIntegrationsForUser.
 func (q *Queries) ListIntegrations(ctx context.Context) ([]Integration, error) {
 	rows, err := q.db.Query(ctx, listIntegrations)
 	if err != nil {
@@ -176,6 +262,7 @@ func (q *Queries) ListIntegrations(ctx context.Context) ([]Integration, error) {
 			&i.Label,
 			&i.NotifiedStatus,
 			&i.NotifiedAt,
+			&i.UserID,
 		); err != nil {
 			return nil, err
 		}
@@ -188,7 +275,7 @@ func (q *Queries) ListIntegrations(ctx context.Context) ([]Integration, error) {
 }
 
 const listIntegrationsByPlatform = `-- name: ListIntegrationsByPlatform :many
-SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at FROM integrations WHERE platform = $1 ORDER BY created_at
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at, user_id FROM integrations WHERE platform = $1 ORDER BY created_at
 `
 
 func (q *Queries) ListIntegrationsByPlatform(ctx context.Context, platform string) ([]Integration, error) {
@@ -219,6 +306,100 @@ func (q *Queries) ListIntegrationsByPlatform(ctx context.Context, platform strin
 			&i.Label,
 			&i.NotifiedStatus,
 			&i.NotifiedAt,
+			&i.UserID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIntegrationsByPlatformForUser = `-- name: ListIntegrationsByPlatformForUser :many
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at, user_id FROM integrations WHERE platform = $1 AND user_id = $2 ORDER BY created_at
+`
+
+type ListIntegrationsByPlatformForUserParams struct {
+	Platform string
+	UserID   pgtype.UUID
+}
+
+func (q *Queries) ListIntegrationsByPlatformForUser(ctx context.Context, arg ListIntegrationsByPlatformForUserParams) ([]Integration, error) {
+	rows, err := q.db.Query(ctx, listIntegrationsByPlatformForUser, arg.Platform, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Integration{}
+	for rows.Next() {
+		var i Integration
+		if err := rows.Scan(
+			&i.ID,
+			&i.Platform,
+			&i.Status,
+			&i.AccountID,
+			&i.DisplayName,
+			&i.Avatar,
+			&i.CredentialsEnc,
+			&i.KeyVersion,
+			&i.AccessTokenExpiresAt,
+			&i.RefreshTokenExpiresAt,
+			&i.LastError,
+			&i.LastSyncedAt,
+			&i.InitialSyncDone,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Label,
+			&i.NotifiedStatus,
+			&i.NotifiedAt,
+			&i.UserID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIntegrationsForUser = `-- name: ListIntegrationsForUser :many
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at, user_id FROM integrations WHERE user_id = $1 ORDER BY platform, created_at
+`
+
+func (q *Queries) ListIntegrationsForUser(ctx context.Context, userID pgtype.UUID) ([]Integration, error) {
+	rows, err := q.db.Query(ctx, listIntegrationsForUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Integration{}
+	for rows.Next() {
+		var i Integration
+		if err := rows.Scan(
+			&i.ID,
+			&i.Platform,
+			&i.Status,
+			&i.AccountID,
+			&i.DisplayName,
+			&i.Avatar,
+			&i.CredentialsEnc,
+			&i.KeyVersion,
+			&i.AccessTokenExpiresAt,
+			&i.RefreshTokenExpiresAt,
+			&i.LastError,
+			&i.LastSyncedAt,
+			&i.InitialSyncDone,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Label,
+			&i.NotifiedStatus,
+			&i.NotifiedAt,
+			&i.UserID,
 		); err != nil {
 			return nil, err
 		}

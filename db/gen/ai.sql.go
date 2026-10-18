@@ -13,34 +13,18 @@ import (
 
 const archiveThread = `-- name: ArchiveThread :exec
 UPDATE chat_threads SET archived = true, updated_at = now()
-WHERE platform = $1 AND game_external_id = $2 AND NOT archived
+WHERE user_id = $1 AND platform = $2 AND game_external_id = $3 AND NOT archived
 `
 
 type ArchiveThreadParams struct {
+	UserID         pgtype.UUID
 	Platform       string
 	GameExternalID string
 }
 
 func (q *Queries) ArchiveThread(ctx context.Context, arg ArchiveThreadParams) error {
-	_, err := q.db.Exec(ctx, archiveThread, arg.Platform, arg.GameExternalID)
+	_, err := q.db.Exec(ctx, archiveThread, arg.UserID, arg.Platform, arg.GameExternalID)
 	return err
-}
-
-const bestGameRowByKey = `-- name: BestGameRowByKey :one
-SELECT id FROM best_games WHERE platform = $1 AND external_id = $2
-`
-
-type BestGameRowByKeyParams struct {
-	Platform   string
-	ExternalID string
-}
-
-// Linha da conta mais avançada do jogo (contexto do roadmap/chat quando o job só tem a chave).
-func (q *Queries) BestGameRowByKey(ctx context.Context, arg BestGameRowByKeyParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, bestGameRowByKey, arg.Platform, arg.ExternalID)
-	var id pgtype.UUID
-	err := row.Scan(&id)
-	return id, err
 }
 
 const completeChatMessage = `-- name: CompleteChatMessage :exec
@@ -81,19 +65,36 @@ func (q *Queries) CompleteGuide(ctx context.Context, arg CompleteGuideParams) er
 	return err
 }
 
+const countAIRequestsSince = `-- name: CountAIRequestsSince :one
+SELECT count(*) FROM ai_requests WHERE user_id = $1 AND created_at >= $2
+`
+
+type CountAIRequestsSinceParams struct {
+	UserID    pgtype.UUID
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) CountAIRequestsSince(ctx context.Context, arg CountAIRequestsSinceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAIRequestsSince, arg.UserID, arg.CreatedAt)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createThread = `-- name: CreateThread :one
-INSERT INTO chat_threads (platform, game_external_id) VALUES ($1, $2)
-ON CONFLICT (platform, game_external_id) WHERE NOT archived DO UPDATE SET updated_at = now()
-RETURNING id, platform, game_external_id, claude_session_id, archived, created_at, updated_at
+INSERT INTO chat_threads (user_id, platform, game_external_id) VALUES ($1, $2, $3)
+ON CONFLICT (user_id, platform, game_external_id) WHERE NOT archived DO UPDATE SET updated_at = now()
+RETURNING id, platform, game_external_id, claude_session_id, archived, created_at, updated_at, user_id
 `
 
 type CreateThreadParams struct {
+	UserID         pgtype.UUID
 	Platform       string
 	GameExternalID string
 }
 
 func (q *Queries) CreateThread(ctx context.Context, arg CreateThreadParams) (ChatThread, error) {
-	row := q.db.QueryRow(ctx, createThread, arg.Platform, arg.GameExternalID)
+	row := q.db.QueryRow(ctx, createThread, arg.UserID, arg.Platform, arg.GameExternalID)
 	var i ChatThread
 	err := row.Scan(
 		&i.ID,
@@ -103,8 +104,23 @@ func (q *Queries) CreateThread(ctx context.Context, arg CreateThreadParams) (Cha
 		&i.Archived,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserID,
 	)
 	return i, err
+}
+
+const deleteGuideEdit = `-- name: DeleteGuideEdit :exec
+DELETE FROM ai_guide_edits WHERE user_id = $1 AND guide_id = $2
+`
+
+type DeleteGuideEditParams struct {
+	UserID  pgtype.UUID
+	GuideID pgtype.UUID
+}
+
+func (q *Queries) DeleteGuideEdit(ctx context.Context, arg DeleteGuideEditParams) error {
+	_, err := q.db.Exec(ctx, deleteGuideEdit, arg.UserID, arg.GuideID)
+	return err
 }
 
 const failChatMessage = `-- name: FailChatMessage :exec
@@ -203,16 +219,17 @@ func (q *Queries) GameTrophiesForAI(ctx context.Context, gameID pgtype.UUID) ([]
 }
 
 const getActiveThread = `-- name: GetActiveThread :one
-SELECT id, platform, game_external_id, claude_session_id, archived, created_at, updated_at FROM chat_threads WHERE platform = $1 AND game_external_id = $2 AND NOT archived
+SELECT id, platform, game_external_id, claude_session_id, archived, created_at, updated_at, user_id FROM chat_threads WHERE user_id = $1 AND platform = $2 AND game_external_id = $3 AND NOT archived
 `
 
 type GetActiveThreadParams struct {
+	UserID         pgtype.UUID
 	Platform       string
 	GameExternalID string
 }
 
 func (q *Queries) GetActiveThread(ctx context.Context, arg GetActiveThreadParams) (ChatThread, error) {
-	row := q.db.QueryRow(ctx, getActiveThread, arg.Platform, arg.GameExternalID)
+	row := q.db.QueryRow(ctx, getActiveThread, arg.UserID, arg.Platform, arg.GameExternalID)
 	var i ChatThread
 	err := row.Scan(
 		&i.ID,
@@ -222,6 +239,7 @@ func (q *Queries) GetActiveThread(ctx context.Context, arg GetActiveThreadParams
 		&i.Archived,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserID,
 	)
 	return i, err
 }
@@ -246,49 +264,34 @@ func (q *Queries) GetChatMessage(ctx context.Context, id pgtype.UUID) (ChatMessa
 	return i, err
 }
 
-const getGuide = `-- name: GetGuide :one
-
-SELECT id, scope, platform, game_external_id, trophy_external_id, status, content, edited_content, schema_version, model, error, generated_at, created_at, updated_at FROM ai_guides
-WHERE scope = $1 AND platform = $2 AND game_external_id = $3 AND trophy_external_id = $4
+const getChatMessageOwner = `-- name: GetChatMessageOwner :one
+SELECT th.user_id, m.role, m.status, m.error
+FROM chat_messages m JOIN chat_threads th ON th.id = m.thread_id
+WHERE m.id = $1
 `
 
-type GetGuideParams struct {
-	Scope            string
-	Platform         string
-	GameExternalID   string
-	TrophyExternalID string
+type GetChatMessageOwnerRow struct {
+	UserID pgtype.UUID
+	Role   string
+	Status string
+	Error  string
 }
 
-// IA: guias (troféu/roadmap) e chat por jogo. Chave = platform + external_id do jogo (ver 00017).
-func (q *Queries) GetGuide(ctx context.Context, arg GetGuideParams) (AiGuide, error) {
-	row := q.db.QueryRow(ctx, getGuide,
-		arg.Scope,
-		arg.Platform,
-		arg.GameExternalID,
-		arg.TrophyExternalID,
-	)
-	var i AiGuide
+// Dono da mensagem (para a stream SSE só servir a resposta a quem perguntou).
+func (q *Queries) GetChatMessageOwner(ctx context.Context, id pgtype.UUID) (GetChatMessageOwnerRow, error) {
+	row := q.db.QueryRow(ctx, getChatMessageOwner, id)
+	var i GetChatMessageOwnerRow
 	err := row.Scan(
-		&i.ID,
-		&i.Scope,
-		&i.Platform,
-		&i.GameExternalID,
-		&i.TrophyExternalID,
+		&i.UserID,
+		&i.Role,
 		&i.Status,
-		&i.Content,
-		&i.EditedContent,
-		&i.SchemaVersion,
-		&i.Model,
 		&i.Error,
-		&i.GeneratedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const getGuideByID = `-- name: GetGuideByID :one
-SELECT id, scope, platform, game_external_id, trophy_external_id, status, content, edited_content, schema_version, model, error, generated_at, created_at, updated_at FROM ai_guides WHERE id = $1
+SELECT id, scope, platform, game_external_id, trophy_external_id, status, content, schema_version, model, error, generated_at, created_at, updated_at, user_id FROM ai_guides WHERE id = $1
 `
 
 func (q *Queries) GetGuideByID(ctx context.Context, id pgtype.UUID) (AiGuide, error) {
@@ -302,19 +305,70 @@ func (q *Queries) GetGuideByID(ctx context.Context, id pgtype.UUID) (AiGuide, er
 		&i.TrophyExternalID,
 		&i.Status,
 		&i.Content,
-		&i.EditedContent,
 		&i.SchemaVersion,
 		&i.Model,
 		&i.Error,
 		&i.GeneratedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserID,
+	)
+	return i, err
+}
+
+const getGuideEdit = `-- name: GetGuideEdit :one
+SELECT content FROM ai_guide_edits WHERE user_id = $1 AND guide_id = $2
+`
+
+type GetGuideEditParams struct {
+	UserID  pgtype.UUID
+	GuideID pgtype.UUID
+}
+
+// Correção PRIVADA do usuário sobre um guia (vence o gerado só para ele).
+func (q *Queries) GetGuideEdit(ctx context.Context, arg GetGuideEditParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getGuideEdit, arg.UserID, arg.GuideID)
+	var content []byte
+	err := row.Scan(&content)
+	return content, err
+}
+
+const getRoadmap = `-- name: GetRoadmap :one
+SELECT id, scope, platform, game_external_id, trophy_external_id, status, content, schema_version, model, error, generated_at, created_at, updated_at, user_id FROM ai_guides
+WHERE scope = 'roadmap' AND user_id = $1 AND platform = $2 AND game_external_id = $3
+`
+
+type GetRoadmapParams struct {
+	UserID         pgtype.UUID
+	Platform       string
+	GameExternalID string
+}
+
+// Roadmap: de cada usuário (depende do progresso dele).
+func (q *Queries) GetRoadmap(ctx context.Context, arg GetRoadmapParams) (AiGuide, error) {
+	row := q.db.QueryRow(ctx, getRoadmap, arg.UserID, arg.Platform, arg.GameExternalID)
+	var i AiGuide
+	err := row.Scan(
+		&i.ID,
+		&i.Scope,
+		&i.Platform,
+		&i.GameExternalID,
+		&i.TrophyExternalID,
+		&i.Status,
+		&i.Content,
+		&i.SchemaVersion,
+		&i.Model,
+		&i.Error,
+		&i.GeneratedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.UserID,
 	)
 	return i, err
 }
 
 const getThreadByID = `-- name: GetThreadByID :one
-SELECT id, platform, game_external_id, claude_session_id, archived, created_at, updated_at FROM chat_threads WHERE id = $1
+SELECT id, platform, game_external_id, claude_session_id, archived, created_at, updated_at, user_id FROM chat_threads WHERE id = $1
 `
 
 func (q *Queries) GetThreadByID(ctx context.Context, id pgtype.UUID) (ChatThread, error) {
@@ -328,12 +382,49 @@ func (q *Queries) GetThreadByID(ctx context.Context, id pgtype.UUID) (ChatThread
 		&i.Archived,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserID,
+	)
+	return i, err
+}
+
+const getTrophyGuide = `-- name: GetTrophyGuide :one
+
+SELECT id, scope, platform, game_external_id, trophy_external_id, status, content, schema_version, model, error, generated_at, created_at, updated_at, user_id FROM ai_guides
+WHERE scope = 'trophy' AND platform = $1 AND game_external_id = $2 AND trophy_external_id = $3
+`
+
+type GetTrophyGuideParams struct {
+	Platform         string
+	GameExternalID   string
+	TrophyExternalID string
+}
+
+// IA: guias (troféu/roadmap) e chat por jogo. Chave = platform + external_id do jogo (ver 00017).
+// Guia de troféu: compartilhado entre os usuários (user_id NULL).
+func (q *Queries) GetTrophyGuide(ctx context.Context, arg GetTrophyGuideParams) (AiGuide, error) {
+	row := q.db.QueryRow(ctx, getTrophyGuide, arg.Platform, arg.GameExternalID, arg.TrophyExternalID)
+	var i AiGuide
+	err := row.Scan(
+		&i.ID,
+		&i.Scope,
+		&i.Platform,
+		&i.GameExternalID,
+		&i.TrophyExternalID,
+		&i.Status,
+		&i.Content,
+		&i.SchemaVersion,
+		&i.Model,
+		&i.Error,
+		&i.GeneratedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.UserID,
 	)
 	return i, err
 }
 
 const getTrophyWithGame = `-- name: GetTrophyWithGame :one
-SELECT t.id, t.game_id, t.group_id, t.external_id, t.name, t.description, t.type, t.hidden, t.icon, t.icon_locked, t.rarity_pct, t.earned, t.earned_at, t.progress, t.target, t.priority, t.notes, t.tags, t.server_shutdown_risk, t.created_at, t.updated_at, gm.platform AS game_platform, gm.external_id AS game_external_id, gm.title AS game_title,
+SELECT t.id, t.game_id, t.group_id, t.external_id, t.name, t.description, t.type, t.hidden, t.icon, t.icon_locked, t.rarity_pct, t.earned, t.earned_at, t.progress, t.target, t.priority, t.notes, t.tags, t.server_shutdown_risk, t.created_at, t.updated_at, gm.user_id AS game_user_id, gm.platform AS game_platform, gm.external_id AS game_external_id, gm.title AS game_title,
        tg.name AS group_name, tg.is_base
 FROM trophies t
 JOIN games gm ON gm.id = t.game_id
@@ -363,6 +454,7 @@ type GetTrophyWithGameRow struct {
 	ServerShutdownRisk bool
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
+	GameUserID         pgtype.UUID
 	GamePlatform       string
 	GameExternalID     string
 	GameTitle          string
@@ -395,6 +487,7 @@ func (q *Queries) GetTrophyWithGame(ctx context.Context, id pgtype.UUID) (GetTro
 		&i.ServerShutdownRisk,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GameUserID,
 		&i.GamePlatform,
 		&i.GameExternalID,
 		&i.GameTitle,
@@ -402,6 +495,20 @@ func (q *Queries) GetTrophyWithGame(ctx context.Context, id pgtype.UUID) (GetTro
 		&i.IsBase,
 	)
 	return i, err
+}
+
+const insertAIRequest = `-- name: InsertAIRequest :exec
+INSERT INTO ai_requests (user_id, kind) VALUES ($1, $2)
+`
+
+type InsertAIRequestParams struct {
+	UserID pgtype.UUID
+	Kind   string
+}
+
+func (q *Queries) InsertAIRequest(ctx context.Context, arg InsertAIRequestParams) error {
+	_, err := q.db.Exec(ctx, insertAIRequest, arg.UserID, arg.Kind)
+	return err
 }
 
 const insertChatMessage = `-- name: InsertChatMessage :one
@@ -487,37 +594,6 @@ func (q *Queries) SetChatMessageRunning(ctx context.Context, id pgtype.UUID) err
 	return err
 }
 
-const setGuideEdit = `-- name: SetGuideEdit :one
-UPDATE ai_guides SET edited_content = $2, updated_at = now() WHERE id = $1 RETURNING id, scope, platform, game_external_id, trophy_external_id, status, content, edited_content, schema_version, model, error, generated_at, created_at, updated_at
-`
-
-type SetGuideEditParams struct {
-	ID            pgtype.UUID
-	EditedContent []byte
-}
-
-func (q *Queries) SetGuideEdit(ctx context.Context, arg SetGuideEditParams) (AiGuide, error) {
-	row := q.db.QueryRow(ctx, setGuideEdit, arg.ID, arg.EditedContent)
-	var i AiGuide
-	err := row.Scan(
-		&i.ID,
-		&i.Scope,
-		&i.Platform,
-		&i.GameExternalID,
-		&i.TrophyExternalID,
-		&i.Status,
-		&i.Content,
-		&i.EditedContent,
-		&i.SchemaVersion,
-		&i.Model,
-		&i.Error,
-		&i.GeneratedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const setThreadSession = `-- name: SetThreadSession :exec
 UPDATE chat_threads SET claude_session_id = $2, updated_at = now() WHERE id = $1
 `
@@ -546,29 +622,38 @@ func (q *Queries) ThreadBusy(ctx context.Context, threadID pgtype.UUID) (bool, e
 	return column_1, err
 }
 
-const upsertGuidePending = `-- name: UpsertGuidePending :one
-INSERT INTO ai_guides (scope, platform, game_external_id, trophy_external_id, status)
-VALUES ($1, $2, $3, $4, 'pending')
-ON CONFLICT (scope, platform, game_external_id, trophy_external_id)
-DO UPDATE SET status = 'pending', error = '', updated_at = now()
-RETURNING id, scope, platform, game_external_id, trophy_external_id, status, content, edited_content, schema_version, model, error, generated_at, created_at, updated_at
+const upsertGuideEdit = `-- name: UpsertGuideEdit :exec
+INSERT INTO ai_guide_edits (user_id, guide_id, content) VALUES ($1, $2, $3)
+ON CONFLICT (user_id, guide_id) DO UPDATE SET content = EXCLUDED.content, updated_at = now()
 `
 
-type UpsertGuidePendingParams struct {
-	Scope            string
-	Platform         string
-	GameExternalID   string
-	TrophyExternalID string
+type UpsertGuideEditParams struct {
+	UserID  pgtype.UUID
+	GuideID pgtype.UUID
+	Content []byte
 }
 
-// Cria o guia (ou volta um existente para pending ao regenerar). A edição do usuário é preservada.
-func (q *Queries) UpsertGuidePending(ctx context.Context, arg UpsertGuidePendingParams) (AiGuide, error) {
-	row := q.db.QueryRow(ctx, upsertGuidePending,
-		arg.Scope,
-		arg.Platform,
-		arg.GameExternalID,
-		arg.TrophyExternalID,
-	)
+func (q *Queries) UpsertGuideEdit(ctx context.Context, arg UpsertGuideEditParams) error {
+	_, err := q.db.Exec(ctx, upsertGuideEdit, arg.UserID, arg.GuideID, arg.Content)
+	return err
+}
+
+const upsertRoadmapPending = `-- name: UpsertRoadmapPending :one
+INSERT INTO ai_guides (scope, user_id, platform, game_external_id, trophy_external_id, status)
+VALUES ('roadmap', $1, $2, $3, '', 'pending')
+ON CONFLICT (user_id, platform, game_external_id) WHERE scope = 'roadmap'
+DO UPDATE SET status = 'pending', error = '', updated_at = now()
+RETURNING id, scope, platform, game_external_id, trophy_external_id, status, content, schema_version, model, error, generated_at, created_at, updated_at, user_id
+`
+
+type UpsertRoadmapPendingParams struct {
+	UserID         pgtype.UUID
+	Platform       string
+	GameExternalID string
+}
+
+func (q *Queries) UpsertRoadmapPending(ctx context.Context, arg UpsertRoadmapPendingParams) (AiGuide, error) {
+	row := q.db.QueryRow(ctx, upsertRoadmapPending, arg.UserID, arg.Platform, arg.GameExternalID)
 	var i AiGuide
 	err := row.Scan(
 		&i.ID,
@@ -578,13 +663,50 @@ func (q *Queries) UpsertGuidePending(ctx context.Context, arg UpsertGuidePending
 		&i.TrophyExternalID,
 		&i.Status,
 		&i.Content,
-		&i.EditedContent,
 		&i.SchemaVersion,
 		&i.Model,
 		&i.Error,
 		&i.GeneratedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserID,
+	)
+	return i, err
+}
+
+const upsertTrophyGuidePending = `-- name: UpsertTrophyGuidePending :one
+INSERT INTO ai_guides (scope, platform, game_external_id, trophy_external_id, status)
+VALUES ('trophy', $1, $2, $3, 'pending')
+ON CONFLICT (platform, game_external_id, trophy_external_id) WHERE scope = 'trophy'
+DO UPDATE SET status = 'pending', error = '', updated_at = now()
+RETURNING id, scope, platform, game_external_id, trophy_external_id, status, content, schema_version, model, error, generated_at, created_at, updated_at, user_id
+`
+
+type UpsertTrophyGuidePendingParams struct {
+	Platform         string
+	GameExternalID   string
+	TrophyExternalID string
+}
+
+// Cria (ou volta para pending ao regenerar) o guia compartilhado do troféu.
+func (q *Queries) UpsertTrophyGuidePending(ctx context.Context, arg UpsertTrophyGuidePendingParams) (AiGuide, error) {
+	row := q.db.QueryRow(ctx, upsertTrophyGuidePending, arg.Platform, arg.GameExternalID, arg.TrophyExternalID)
+	var i AiGuide
+	err := row.Scan(
+		&i.ID,
+		&i.Scope,
+		&i.Platform,
+		&i.GameExternalID,
+		&i.TrophyExternalID,
+		&i.Status,
+		&i.Content,
+		&i.SchemaVersion,
+		&i.Model,
+		&i.Error,
+		&i.GeneratedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.UserID,
 	)
 	return i, err
 }

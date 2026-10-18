@@ -67,9 +67,9 @@ func statusPayload(row dbgen.ClaimStatusNotificationRow, status string) push.Pay
 		if row.Platform == "steam" {
 			body = "A conta precisa ser reconectada em Contas."
 		}
-		return push.Payload{Kind: push.KindReconnect, Title: "Reconecte a conta " + account, Body: body, URL: integrationsURL, Tag: tag}
+		return push.Payload{UserID: push.UserIDString(row.UserID), Kind: push.KindReconnect, Title: "Reconecte a conta " + account, Body: body, URL: integrationsURL, Tag: tag}
 	default: // error_private
-		return push.Payload{Kind: push.KindReconnect, Title: "Perfil " + account + " ficou privado",
+		return push.Payload{UserID: push.UserIDString(row.UserID), Kind: push.KindReconnect, Title: "Perfil " + account + " ficou privado",
 			Body: "Deixe os detalhes do jogo públicos na Steam para o sync voltar a funcionar.", URL: integrationsURL, Tag: tag}
 	}
 }

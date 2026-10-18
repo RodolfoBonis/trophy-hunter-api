@@ -59,8 +59,10 @@ const refreshSkew = 24 * time.Hour
 
 // ConnectPSNParams descreve uma nova conta PSN.
 type ConnectPSNParams struct {
-	Label string
-	NPSSO string
+	// UserID: dono da conta no app.
+	UserID pgtype.UUID
+	Label  string
+	NPSSO  string
 }
 
 // ConnectPSN troca o NPSSO por tokens, identifica a conta, grava cifrado e enfileira o full sync.
@@ -105,6 +107,7 @@ func (s *Syncer) ConnectPSN(ctx context.Context, p ConnectPSNParams) (dbgen.Inte
 	integ, err := s.q.CreateIntegration(ctx, dbgen.CreateIntegrationParams{
 		Platform: "psn", Label: label, AccountID: summary.AccountID, DisplayName: display, Avatar: profile.Avatar,
 		CredentialsEnc: blob, KeyVersion: int32(s.cipher.Version()), //nolint:gosec // versão pequena
+		UserID: p.UserID,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {

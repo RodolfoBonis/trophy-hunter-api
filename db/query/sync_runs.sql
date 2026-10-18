@@ -54,7 +54,8 @@ WHERE r.status = 'running'
 
 -- name: ListSyncRuns :many
 SELECT * FROM sync_runs
-WHERE (sqlc.narg(platform)::text IS NULL OR platform = sqlc.narg(platform)::text)
+WHERE integration_id IN (SELECT i.id FROM integrations i WHERE i.user_id = sqlc.arg(user_id)::uuid)
+  AND (sqlc.narg(platform)::text IS NULL OR platform = sqlc.narg(platform)::text)
   AND (sqlc.narg(integration_id)::uuid IS NULL OR integration_id = sqlc.narg(integration_id)::uuid)
 ORDER BY started_at DESC
 LIMIT $1;

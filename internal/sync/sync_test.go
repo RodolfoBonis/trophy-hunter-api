@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
@@ -64,6 +65,9 @@ func (f *fakeSteam) ResolveVanityURL(context.Context, string) (string, error) {
 }
 
 func desc(s string) *string { return &s }
+
+// ownerID é o dono criado pela migration 00019 (todas as contas dos testes são dele).
+var ownerID = pgtype.UUID{Bytes: [16]byte{15: 1}, Valid: true}
 
 func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
@@ -141,7 +145,7 @@ func countUnlockEvents(t *testing.T, pool *pgxpool.Pool) int {
 
 func latestRun(t *testing.T, q *dbgen.Queries) dbgen.SyncRun {
 	t.Helper()
-	runs, err := q.ListSyncRuns(context.Background(), dbgen.ListSyncRunsParams{Limit: 1})
+	runs, err := q.ListSyncRuns(context.Background(), dbgen.ListSyncRunsParams{UserID: ownerID, Limit: 1})
 	require.NoError(t, err)
 	require.Len(t, runs, 1)
 	return runs[0]
@@ -155,7 +159,7 @@ func TestFullSyncThenIncrementalDiff(t *testing.T) {
 	fake := newFake()
 	syncer := newSyncer(t, pool, q, jobs, fake)
 
-	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "FAKEKEY", IDOrVanity: "76561197960000000"})
+	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{UserID: ownerID, APIKey: "FAKEKEY", IDOrVanity: "76561197960000000"})
 	require.NoError(t, err)
 	require.Equal(t, "connected", integ.Status)
 	require.Equal(t, "TH", integ.DisplayName)
@@ -222,7 +226,7 @@ func TestFullSyncThenIncrementalDiff(t *testing.T) {
 		require.True(t, tr.Earned, "ambos troféus desbloqueados")
 	}
 
-	rows, err := q.ListGames(ctx, dbgen.ListGamesParams{Sort: "last_played", Lim: 50, Off: 0, Almost: 0.8})
+	rows, err := q.ListGames(ctx, dbgen.ListGamesParams{UserID: ownerID, Sort: "last_played", Lim: 50, Off: 0, Almost: 0.8})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, int64(2), rows[0].Total)
@@ -247,7 +251,7 @@ func TestFanOutCountsFailedChild(t *testing.T) {
 
 	syncer := newSyncer(t, pool, q, jobs, fake)
 
-	integ0, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "FAKEKEY", IDOrVanity: "76561197960000000"})
+	integ0, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{UserID: ownerID, APIKey: "FAKEKEY", IDOrVanity: "76561197960000000"})
 	require.NoError(t, err)
 	processAll(t, jobs, syncer)
 
@@ -288,7 +292,7 @@ func TestPrivateEmptyLibrary(t *testing.T) {
 	fake.summary.CommunityVisibleState = 1 // privado
 	syncer := newSyncer(t, pool, q, jobs, fake)
 
-	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "FAKEKEY", IDOrVanity: "76561197960000000"})
+	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{UserID: ownerID, APIKey: "FAKEKEY", IDOrVanity: "76561197960000000"})
 	require.NoError(t, err)
 	require.Equal(t, "error_private", integ.Status) // já no connect
 	processAll(t, jobs, syncer)
@@ -310,7 +314,7 @@ func TestUnlockEventUniqueness(t *testing.T) {
 	q := dbgen.New(pool)
 
 	integ, err := q.CreateIntegration(ctx, dbgen.CreateIntegrationParams{
-		Platform: "steam", Label: "Principal", AccountID: "76561197960000001",
+		Platform: "steam", Label: "Principal", AccountID: "76561197960000001", UserID: ownerID,
 	})
 	require.NoError(t, err)
 	game, err := q.UpsertGameIdentity(ctx, dbgen.UpsertGameIdentityParams{
@@ -342,7 +346,7 @@ func TestConnectPrivateProfileMarksErrorPrivate(t *testing.T) {
 
 	syncer := newSyncer(t, pool, q, jobs, fake)
 
-	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "FAKEKEY", IDOrVanity: "76561197960000000"})
+	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{UserID: ownerID, APIKey: "FAKEKEY", IDOrVanity: "76561197960000000"})
 	require.NoError(t, err)
 	require.Equal(t, "error_private", integ.Status)
 }
@@ -370,7 +374,7 @@ func TestCoverUsesStoreAssets(t *testing.T) {
 			fake.assets, fake.assetsErr = tc.assets, tc.assetsErr
 			syncer := newSyncer(t, pool, q, jobs, fake)
 
-			integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "K", IDOrVanity: "76561197960000000"})
+			integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{UserID: ownerID, APIKey: "K", IDOrVanity: "76561197960000000"})
 			require.NoError(t, err)
 			processAll(t, jobs, syncer)
 
@@ -401,7 +405,7 @@ func TestBorrowedGameFromRecentlyPlayed(t *testing.T) {
 	fake.percentages[lotf] = map[string]float64{"BOSS": 40, "END": 9}
 	syncer := newSyncer(t, pool, q, jobs, fake)
 
-	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{APIKey: "K", IDOrVanity: "76561197960000000"})
+	integ, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{UserID: ownerID, APIKey: "K", IDOrVanity: "76561197960000000"})
 	require.NoError(t, err)
 	processAll(t, jobs, syncer)
 

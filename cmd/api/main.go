@@ -85,7 +85,7 @@ func run() error {
 	steamFactory := newSteamFactory(cfg, logger)
 	syncer := syncpkg.New(syncpkg.Deps{
 		Queries: queries, Pool: pool, Queue: jobs, Cipher: cipher,
-		SteamFactory: steamFactory, Logger: logger,
+		SteamFactory: steamFactory, Logger: logger, SteamServerKey: cfg.Steam.ServerAPIKey,
 		PSN: psn.New(psn.Options{AuthBaseURL: cfg.PSN.AuthBaseURL, APIBaseURL: cfg.PSN.APIBaseURL, Lang: cfg.PSN.Lang, RPS: cfg.PSN.RPS, Burst: cfg.PSN.Burst, Logger: logger}),
 	})
 
@@ -97,12 +97,12 @@ func run() error {
 		rdb = nil
 	} else {
 		defer func() { _ = rdb.Close() }()
-		aiSvc = ai.New(ai.Deps{Queries: queries, Queue: jobs, Redis: rdb, Logger: logger})
+		aiSvc = ai.New(ai.Deps{Queries: queries, Queue: jobs, Redis: rdb, DailyLimit: cfg.AI.DailyLimit, Logger: logger})
 	}
 
 	handlers := api.NewHandlers(api.HandlerDeps{
 		Queries: queries, Pool: pool, Syncer: syncer, Logger: logger,
-		AI: aiSvc, Redis: rdb,
+		AI: aiSvc, Redis: rdb, OwnerEmail: cfg.Auth.OwnerEmail, AppURL: cfg.HTTP.AppURL,
 		Push:      push.New(queries, push.Config{PublicKey: cfg.Push.VAPIDPublicKey, PrivateKey: cfg.Push.VAPIDPrivateKey, Subject: cfg.Push.VAPIDSubject}, nil, logger),
 		AuthReady: authenticator.Ready,
 	})

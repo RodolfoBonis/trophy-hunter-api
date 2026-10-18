@@ -1,7 +1,8 @@
 # Trophy Hunter API
 
-Backend pessoal (single-user) para acompanhar conquistas **Steam** e troféus **PSN**: biblioteca,
-progresso por jogo, o que falta para platina/100% e guias de IA. Go 1.26 · chi · pgx/sqlc · goose.
+Backend do Trophy Hunter — conquistas **Steam** e troféus **PSN**: biblioteca, progresso por jogo, o
+que falta para platina/100% e guias de IA. **Multiusuário por convite** (o dono convida amigos; cada
+um vê só os próprios dados). Go 1.26 · chi · pgx/sqlc · goose.
 
 - **`cmd/api`** — API REST (`/api/v1`), valida o JWT do Keycloak (realm `platform`) e enfileira syncs e
   pedidos de IA; repassa a resposta da IA por SSE.
@@ -137,6 +138,20 @@ Guias e conversas são do **jogo** (valem para todas as contas). O chat usa `--r
 se a sessão sumir (pod recriado), recomeça com o histórico recente no prompt. Limite de uso da
 assinatura → o job é reagendado com backoff. Para rodar local: `CLAUDE_CODE_OAUTH_TOKEN=… go run
 ./cmd/ai-worker` (precisa do `claude` no PATH e do Redis).
+
+## Multiusuário
+
+- **Identidade**: o JWT do realm `trophy-hunter` (iss + sub). Todo login cria/acha um `users`; quem
+  ainda não aceitou convite fica `pending` e só usa `/me` e `POST /invites/{code}/accept` (o resto
+  responde 403 `code: not_invited`).
+- **Dono**: o e-mail **verificado** igual a `OWNER_EMAIL` reivindica a linha do dono criada pela
+  migration 00019 (todos os dados antigos são dele) — também ao trocar de realm.
+- **Convites** (só o dono): `POST /admin/invites` devolve um link de uso único (7 dias; só o hash fica
+  no banco); `GET/DELETE /admin/members` lista e remove (`?purge=true` apaga os dados da pessoa).
+- **Isolamento**: `games.user_id`/`integrations.user_id` em toda query; recurso de outra pessoa = 404.
+  Guia de troféu é compartilhado (economiza cota; edição é privada em `ai_guide_edits`); roadmap e
+  chat são de cada um; membros têm teto `AI_DAILY_LIMIT`/24 h.
+- **Steam**: sem API key, a conta usa a de outra conta da mesma pessoa ou `STEAM_SERVER_API_KEY`.
 
 ## Avisos e notificações
 

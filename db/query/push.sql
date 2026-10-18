@@ -1,23 +1,25 @@
 -- Web push: inscrições, avisos de desbloqueio ainda não enviados e anti-spam dos alertas de conta.
 
 -- name: UpsertPushSubscription :one
-INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_agent)
-VALUES ($1, $2, $3, $4)
+-- Um navegador pertence a quem se inscreveu por último nele (aparelho compartilhado troca de dono).
+INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_agent, user_id)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (endpoint) DO UPDATE
-SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, user_agent = EXCLUDED.user_agent, failures = 0, updated_at = now()
+SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, user_agent = EXCLUDED.user_agent,
+    user_id = EXCLUDED.user_id, failures = 0, updated_at = now()
 RETURNING *;
 
 -- name: DeletePushSubscriptionByEndpoint :execrows
-DELETE FROM push_subscriptions WHERE endpoint = $1;
+DELETE FROM push_subscriptions WHERE endpoint = $1 AND user_id = $2;
 
 -- name: DeletePushSubscription :exec
 DELETE FROM push_subscriptions WHERE id = $1;
 
 -- name: ListPushSubscriptions :many
-SELECT * FROM push_subscriptions ORDER BY created_at;
+SELECT * FROM push_subscriptions WHERE user_id = $1 ORDER BY created_at;
 
 -- name: CountPushSubscriptions :one
-SELECT count(*) FROM push_subscriptions;
+SELECT count(*) FROM push_subscriptions WHERE user_id = $1;
 
 -- name: MarkPushSuccess :exec
 UPDATE push_subscriptions SET failures = 0, last_success_at = now(), updated_at = now() WHERE id = $1;
@@ -27,7 +29,7 @@ UPDATE push_subscriptions SET failures = failures + 1, updated_at = now() WHERE 
 
 -- name: ListUnpushedUnlocks :many
 -- Desbloqueios ainda não notificados por push (mesmo formato dos avisos da UI).
-SELECT e.id, t.name AS trophy_name, t.type AS trophy_type,
+SELECT e.id, g.user_id, t.name AS trophy_name, t.type AS trophy_type,
        g.id AS game_id, g.title AS game_title, g.platform,
        (CASE WHEN g.platform = 'psn' THEN t.type = 'platinum'
              ELSE NOT EXISTS (SELECT 1 FROM trophies o WHERE o.game_id = g.id AND NOT o.earned) END)::boolean AS completes_game
@@ -50,7 +52,7 @@ SET notified_status = sqlc.arg(status), notified_at = now()
 WHERE id = sqlc.arg(id)
   AND notified_status <> sqlc.arg(status)
   AND (sqlc.arg(status) = 'needs_reconnect' OR notified_at IS NULL OR notified_at < now() - interval '6 hours')
-RETURNING id, platform, label, display_name;
+RETURNING id, user_id, platform, label, display_name;
 
 -- name: MarkStatusConnected :exec
 -- Conta voltou ao normal: a próxima falha volta a poder notificar (respeitando a janela de 6 h).

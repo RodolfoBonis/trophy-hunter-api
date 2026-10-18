@@ -113,20 +113,27 @@ func (q *Queries) FinalizeSyncRunChild(ctx context.Context, arg FinalizeSyncRunC
 
 const listSyncRuns = `-- name: ListSyncRuns :many
 SELECT id, integration_id, platform, scope, trigger, status, started_at, finished_at, items_changed, games_touched, error, created_at, games_total, games_done, games_failed, fanout_sealed FROM sync_runs
-WHERE ($2::text IS NULL OR platform = $2::text)
-  AND ($3::uuid IS NULL OR integration_id = $3::uuid)
+WHERE integration_id IN (SELECT i.id FROM integrations i WHERE i.user_id = $2::uuid)
+  AND ($3::text IS NULL OR platform = $3::text)
+  AND ($4::uuid IS NULL OR integration_id = $4::uuid)
 ORDER BY started_at DESC
 LIMIT $1
 `
 
 type ListSyncRunsParams struct {
 	Limit         int32
+	UserID        pgtype.UUID
 	Platform      *string
 	IntegrationID pgtype.UUID
 }
 
 func (q *Queries) ListSyncRuns(ctx context.Context, arg ListSyncRunsParams) ([]SyncRun, error) {
-	rows, err := q.db.Query(ctx, listSyncRuns, arg.Limit, arg.Platform, arg.IntegrationID)
+	rows, err := q.db.Query(ctx, listSyncRuns,
+		arg.Limit,
+		arg.UserID,
+		arg.Platform,
+		arg.IntegrationID,
+	)
 	if err != nil {
 		return nil, err
 	}

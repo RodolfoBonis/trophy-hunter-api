@@ -62,16 +62,33 @@ func NewRouter(d RouterDeps) http.Handler {
 	// API autenticada.
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(d.Auth.Middleware)
+		r.Use(h.resolveUser) // usuário do app (dono reivindicado por OWNER_EMAIL; demais nascem pending)
 		r.Use(middleware.EnforceJSONBody)
+
+		// Liberado para quem ainda não entrou: quem sou eu e aceitar um convite.
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.Timeout(requestTimeout(d.WriteTimeout)))
+			r.Get("/me", h.getMe)
+			r.Post("/invites/{code}/accept", h.acceptInvite)
+		})
 
 		// SSE da IA: conexão longa (heartbeat + deadline de escrita renovado a cada evento), por
 		// isso FORA do timeout de request.
-		r.Get("/ai/streams/{id}", h.aiStream)
+		r.With(requireMember).Get("/ai/streams/{id}", h.aiStream)
 
 		r.Group(func(r chi.Router) {
+			r.Use(requireMember)
 			r.Use(middleware.Timeout(requestTimeout(d.WriteTimeout)))
 
-			r.Get("/me", h.getMe)
+			// Convites e membros: só o dono.
+			r.Route("/admin", func(r chi.Router) {
+				r.Use(requireOwner)
+				r.Post("/invites", h.createInvite)
+				r.Get("/invites", h.listInvites)
+				r.Delete("/invites/{id}", h.revokeInvite)
+				r.Get("/members", h.listMembers)
+				r.Delete("/members/{id}", h.removeMember)
+			})
 
 			r.Get("/integrations", h.listIntegrations)
 			r.Post("/integrations/steam", h.connectSteam)

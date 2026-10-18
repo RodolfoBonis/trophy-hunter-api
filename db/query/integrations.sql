@@ -1,25 +1,42 @@
 -- Integrações: várias contas por plataforma (ver migration 00013). Tudo é endereçado pelo id.
 
 -- name: GetIntegration :one
+-- Uso interno (workers). A API usa GetIntegrationForUser.
 SELECT * FROM integrations WHERE id = $1;
+
+-- name: GetIntegrationForUser :one
+SELECT * FROM integrations WHERE id = $1 AND user_id = $2;
 
 -- name: GetIntegrationByAccount :one
 SELECT * FROM integrations WHERE platform = $1 AND account_id = $2;
 
 -- name: ListIntegrations :many
+-- Todas as contas de todos os usuários (scheduler, métricas). A API usa ListIntegrationsForUser.
 SELECT * FROM integrations ORDER BY platform, created_at;
+
+-- name: ListIntegrationsForUser :many
+SELECT * FROM integrations WHERE user_id = $1 ORDER BY platform, created_at;
+
+-- name: ListAccountsForMetrics :many
+-- Contas com o nome do dono (rótulo "pessoa/conta" nas métricas).
+SELECT i.platform, i.label, i.status, i.last_synced_at, u.name AS owner_name, u.email AS owner_email
+FROM integrations i JOIN users u ON u.id = i.user_id
+ORDER BY u.created_at, i.platform, i.created_at;
 
 -- name: ListIntegrationsByPlatform :many
 SELECT * FROM integrations WHERE platform = $1 ORDER BY created_at;
+
+-- name: ListIntegrationsByPlatformForUser :many
+SELECT * FROM integrations WHERE platform = $1 AND user_id = $2 ORDER BY created_at;
 
 -- name: CreateIntegration :one
 -- Cria a conexão com uma conta gravando as credenciais cifradas e a identidade da conta.
 -- initial_sync_done=false: o primeiro full sync não gera unlock_events.
 INSERT INTO integrations (
     platform, label, status, account_id, display_name, avatar, credentials_enc, key_version,
-    last_error, initial_sync_done, updated_at
+    last_error, initial_sync_done, user_id, updated_at
 ) VALUES (
-    $1, $2, 'connected', $3, $4, $5, $6, $7, '', false, now()
+    $1, $2, 'connected', $3, $4, $5, $6, $7, '', false, $8, now()
 )
 RETURNING *;
 

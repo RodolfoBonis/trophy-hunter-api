@@ -16,10 +16,15 @@ const searchGames = `-- name: SearchGames :many
 SELECT b.id, b.title, b.platform, b.external_id, b.cover, b.hero, b.completion_pct
 FROM best_games b
 JOIN games g ON g.id = b.id
-WHERE g.normalized_title ILIKE '%' || $1::text || '%' ESCAPE '\'
-ORDER BY similarity(g.normalized_title, $1::text) DESC, b.title
+WHERE b.user_id = $1::uuid AND g.normalized_title ILIKE '%' || $2::text || '%' ESCAPE '\'
+ORDER BY similarity(g.normalized_title, $2::text) DESC, b.title
 LIMIT 8
 `
+
+type SearchGamesParams struct {
+	UserID pgtype.UUID
+	Q      string
+}
 
 type SearchGamesRow struct {
 	ID            pgtype.UUID
@@ -34,8 +39,8 @@ type SearchGamesRow struct {
 // Busca da paleta de comandos (⌘K): jogos e troféus. Só a conta mais avançada de cada jogo
 // (best_games), para não repetir o mesmo jogo/troféu por conta. Troféus ocultos ainda não obtidos
 // não aparecem (spoiler guard).
-func (q *Queries) SearchGames(ctx context.Context, q_ string) ([]SearchGamesRow, error) {
-	rows, err := q.db.Query(ctx, searchGames, q_)
+func (q *Queries) SearchGames(ctx context.Context, arg SearchGamesParams) ([]SearchGamesRow, error) {
+	rows, err := q.db.Query(ctx, searchGames, arg.UserID, arg.Q)
 	if err != nil {
 		return nil, err
 	}
@@ -67,11 +72,16 @@ SELECT t.id, t.name, t.type, t.icon, t.earned, t.rarity_pct,
        b.id AS game_id, b.title AS game_title, b.platform
 FROM trophies t
 JOIN best_games b ON b.id = t.game_id
-WHERE t.name ILIKE '%' || $1::text || '%' ESCAPE '\'
+WHERE b.user_id = $1::uuid AND t.name ILIKE '%' || $2::text || '%' ESCAPE '\'
   AND (t.earned OR NOT t.hidden)
-ORDER BY similarity(lower(t.name), lower($1::text)) DESC, t.name
+ORDER BY similarity(lower(t.name), lower($2::text)) DESC, t.name
 LIMIT 12
 `
+
+type SearchTrophiesParams struct {
+	UserID pgtype.UUID
+	Q      string
+}
 
 type SearchTrophiesRow struct {
 	ID        pgtype.UUID
@@ -85,8 +95,8 @@ type SearchTrophiesRow struct {
 	Platform  string
 }
 
-func (q *Queries) SearchTrophies(ctx context.Context, q_ string) ([]SearchTrophiesRow, error) {
-	rows, err := q.db.Query(ctx, searchTrophies, q_)
+func (q *Queries) SearchTrophies(ctx context.Context, arg SearchTrophiesParams) ([]SearchTrophiesRow, error) {
+	rows, err := q.db.Query(ctx, searchTrophies, arg.UserID, arg.Q)
 	if err != nil {
 		return nil, err
 	}

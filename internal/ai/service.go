@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"time"
+
 	"context"
 	"encoding/json"
 	"errors"
@@ -58,6 +60,8 @@ type Deps struct {
 	Model      string
 	GuideModel string
 	Workdir    string
+	// DailyLimit: pedidos de IA por membro em 24 h (0 = sem teto). O dono nunca tem teto.
+	DailyLimit int
 	Logger     *slog.Logger
 }
 
@@ -70,6 +74,7 @@ type Service struct {
 	model      string
 	guideModel string
 	workdir    string
+	dailyLimit int
 	logger     *slog.Logger
 }
 
@@ -79,13 +84,15 @@ func New(d Deps) *Service {
 	if gm == "" {
 		gm = d.Model
 	}
-	return &Service{q: d.Queries, queue: d.Queue, rdb: d.Redis, runner: d.Runner, model: d.Model, guideModel: gm, workdir: d.Workdir, logger: d.Logger}
+	return &Service{q: d.Queries, queue: d.Queue, rdb: d.Redis, runner: d.Runner, model: d.Model, guideModel: gm, workdir: d.Workdir, dailyLimit: d.DailyLimit, logger: d.Logger}
 }
 
 type guidePayload struct {
 	GuideID  string `json:"guide_id"`
 	GameID   string `json:"game_id"`
 	TrophyID string `json:"trophy_id,omitempty"`
+	// RequestedBy: quem pediu (recebe o push de "guia pronto").
+	RequestedBy string `json:"requested_by,omitempty"`
 }
 
 type chatPayload struct {
@@ -95,26 +102,51 @@ type chatPayload struct {
 
 /* ── Pedidos (API) ─────────────────────────────────────────────────────────────────────── */
 
-// RequestTrophyGuide cria (ou regenera) o guia do troféu e enfileira a geração.
-func (s *Service) RequestTrophyGuide(ctx context.Context, t dbgen.GetTrophyWithGameRow) (dbgen.AiGuide, error) {
-	g, err := s.q.UpsertGuidePending(ctx, dbgen.UpsertGuidePendingParams{
-		Scope: ScopeTrophy, Platform: t.GamePlatform, GameExternalID: t.GameExternalID, TrophyExternalID: t.ExternalID,
-	})
-	if err != nil {
-		return g, err
+// ErrDailyLimit indica que o membro atingiu o teto diário de pedidos de IA.
+var ErrDailyLimit = errors.New("limite diário de IA atingido")
+
+// checkQuota aplica o teto diário aos membros (o dono não tem teto) e registra o pedido.
+func (s *Service) checkQuota(ctx context.Context, u dbgen.User, kind string) error {
+	if u.Role != "owner" && s.dailyLimit > 0 {
+		n, err := s.q.CountAIRequestsSince(ctx, dbgen.CountAIRequestsSinceParams{
+			UserID: u.ID, CreatedAt: pgtype.Timestamptz{Time: time.Now().Add(-24 * time.Hour), Valid: true},
+		})
+		if err != nil {
+			return err
+		}
+		if n >= int64(s.dailyLimit) {
+			return ErrDailyLimit
+		}
 	}
-	return g, s.enqueueGuide(ctx, guidePayload{GuideID: uuidString(g.ID), GameID: uuidString(t.GameID), TrophyID: uuidString(t.ID)})
+	return s.q.InsertAIRequest(ctx, dbgen.InsertAIRequestParams{UserID: u.ID, Kind: kind})
 }
 
-// RequestRoadmap cria (ou regenera) o roadmap do jogo e enfileira a geração.
-func (s *Service) RequestRoadmap(ctx context.Context, game dbgen.Game) (dbgen.AiGuide, error) {
-	g, err := s.q.UpsertGuidePending(ctx, dbgen.UpsertGuidePendingParams{
-		Scope: ScopeRoadmap, Platform: game.Platform, GameExternalID: game.ExternalID,
+// RequestTrophyGuide cria (ou regenera) o guia COMPARTILHADO do troféu e enfileira a geração.
+func (s *Service) RequestTrophyGuide(ctx context.Context, u dbgen.User, t dbgen.GetTrophyWithGameRow) (dbgen.AiGuide, error) {
+	if err := s.checkQuota(ctx, u, ScopeTrophy); err != nil {
+		return dbgen.AiGuide{}, err
+	}
+	g, err := s.q.UpsertTrophyGuidePending(ctx, dbgen.UpsertTrophyGuidePendingParams{
+		Platform: t.GamePlatform, GameExternalID: t.GameExternalID, TrophyExternalID: t.ExternalID,
 	})
 	if err != nil {
 		return g, err
 	}
-	return g, s.enqueueGuide(ctx, guidePayload{GuideID: uuidString(g.ID), GameID: uuidString(game.ID)})
+	return g, s.enqueueGuide(ctx, guidePayload{GuideID: uuidString(g.ID), GameID: uuidString(t.GameID), TrophyID: uuidString(t.ID), RequestedBy: uuidString(u.ID)})
+}
+
+// RequestRoadmap cria (ou regenera) o roadmap DO USUÁRIO para o jogo e enfileira a geração.
+func (s *Service) RequestRoadmap(ctx context.Context, u dbgen.User, game dbgen.Game) (dbgen.AiGuide, error) {
+	if err := s.checkQuota(ctx, u, ScopeRoadmap); err != nil {
+		return dbgen.AiGuide{}, err
+	}
+	g, err := s.q.UpsertRoadmapPending(ctx, dbgen.UpsertRoadmapPendingParams{
+		UserID: u.ID, Platform: game.Platform, GameExternalID: game.ExternalID,
+	})
+	if err != nil {
+		return g, err
+	}
+	return g, s.enqueueGuide(ctx, guidePayload{GuideID: uuidString(g.ID), GameID: uuidString(game.ID), RequestedBy: uuidString(u.ID)})
 }
 
 func (s *Service) enqueueGuide(ctx context.Context, p guidePayload) error {
@@ -128,7 +160,7 @@ func (s *Service) enqueueGuide(ctx context.Context, p guidePayload) error {
 }
 
 // SendChat grava a pergunta e a resposta pendente do assistente e enfileira a geração.
-func (s *Service) SendChat(ctx context.Context, game dbgen.Game, text string) (user, assistant dbgen.ChatMessage, err error) {
+func (s *Service) SendChat(ctx context.Context, u dbgen.User, game dbgen.Game, text string) (user, assistant dbgen.ChatMessage, err error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return user, assistant, ErrEmptyChat
@@ -136,7 +168,7 @@ func (s *Service) SendChat(ctx context.Context, game dbgen.Game, text string) (u
 	if len([]rune(text)) > MaxChatMessage {
 		text = string([]rune(text)[:MaxChatMessage])
 	}
-	th, err := s.q.CreateThread(ctx, dbgen.CreateThreadParams{Platform: game.Platform, GameExternalID: game.ExternalID})
+	th, err := s.q.CreateThread(ctx, dbgen.CreateThreadParams{UserID: u.ID, Platform: game.Platform, GameExternalID: game.ExternalID})
 	if err != nil {
 		return user, assistant, err
 	}
@@ -146,6 +178,9 @@ func (s *Service) SendChat(ctx context.Context, game dbgen.Game, text string) (u
 	}
 	if busy {
 		return user, assistant, ErrChatBusy
+	}
+	if err = s.checkQuota(ctx, u, KindChat); err != nil {
+		return user, assistant, err
 	}
 	if user, err = s.q.InsertChatMessage(ctx, dbgen.InsertChatMessageParams{ThreadID: th.ID, Role: "user", Content: text, Status: "done"}); err != nil {
 		return user, assistant, err
@@ -256,6 +291,10 @@ func (s *Service) handleGuide(ctx context.Context, p guidePayload) error {
 	}
 	metrics.AIJob(guide.Scope, "ok")
 	_ = pub.Close(ctx, stream.TypeDone, "")
+	ready.UserID = p.RequestedBy
+	if ready.UserID == "" {
+		return nil // pedido antigo, sem dono registrado: sem aviso
+	}
 	if err := push.Enqueue(ctx, s.queue, ready, ""); err != nil {
 		s.logger.Warn("ai: enfileirar aviso de guia pronto falhou", slog.String("err", err.Error()))
 	}
