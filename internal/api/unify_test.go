@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"testing"
@@ -33,10 +34,20 @@ func (psnPortal) TrophyTitles(context.Context, string) ([]psn.TrophyTitle, error
 	return []psn.TrophyTitle{
 		{NpCommunicationID: "NPWR_P2", NpServiceName: "trophy", TrophyTitleName: "Portal 2™", LastUpdatedDateTime: at},
 		{NpCommunicationID: "NPWR_PK", NpServiceName: "trophy", TrophyTitleName: "Portal Knights", LastUpdatedDateTime: at},
+		// "Remake" homônimo do Portal da Steam (appid 400, 2 conquistas), mas com 40 troféus: é outro jogo.
+		{NpCommunicationID: "NPWR_PO", NpServiceName: "trophy2", TrophyTitleName: "Portal", LastUpdatedDateTime: at},
 	}, nil
 }
-func (psnPortal) TitleTrophies(context.Context, string, string, string) ([]psn.TrophyDef, error) {
-	return []psn.TrophyDef{{TrophyID: 1, TrophyType: "bronze", TrophyName: "X", TrophyGroupID: "default"}}, nil
+func (psnPortal) TitleTrophies(_ context.Context, _ string, id, _ string) ([]psn.TrophyDef, error) {
+	n := 1
+	if id == "NPWR_PO" {
+		n = 40
+	}
+	defs := make([]psn.TrophyDef, 0, n)
+	for i := 1; i <= n; i++ {
+		defs = append(defs, psn.TrophyDef{TrophyID: i, TrophyType: "bronze", TrophyName: fmt.Sprintf("T%d", i), TrophyGroupID: "default"})
+	}
+	return defs, nil
 }
 func (psnPortal) TitleGroups(context.Context, string, string, string) ([]psn.TrophyGroup, error) {
 	return nil, nil
@@ -81,6 +92,7 @@ func TestCrossPlatformUnify(t *testing.T) {
 	require.True(t, byExt["620"].CrossPlatform, "Portal 2 (Steam) ↔ Portal 2™ (PSN) — mesmo título normalizado")
 	require.True(t, byExt["NPWR_P2"].CrossPlatform)
 	require.False(t, byExt["NPWR_PK"].CrossPlatform, "Portal Knights não é Portal")
+	require.False(t, byExt["NPWR_PO"].CrossPlatform, "mesmo nome, mas 40 troféus × 2: remake homônimo não une sozinho")
 	require.False(t, byExt["400"].CrossPlatform)
 	all := list("")
 	_, steamP2 := all["620"]
@@ -113,12 +125,13 @@ func TestCrossPlatformUnify(t *testing.T) {
 
 	// Candidatos da outra plataforma e vínculo manual (Portal Steam ↔ Portal Knights PSN).
 	cands := call[[]struct {
-		GameID string `json:"game_id"`
-		Title  string `json:"title"`
+		GameID   string `json:"game_id"`
+		Title    string `json:"title"`
+		Platform string `json:"platform"`
 	}](t, e, http.MethodGet, "/api/v1/games/"+byExt["400"].ID+"/link-candidates?q=portal", "", http.StatusOK)
 	require.NotEmpty(t, cands)
 	for _, c := range cands {
-		require.NotEqual(t, "Portal", c.Title, "só jogos da OUTRA plataforma")
+		require.Equal(t, "psn", c.Platform, "só jogos da OUTRA plataforma")
 	}
 	link := e.do(t, http.MethodPost, "/api/v1/games/"+byExt["400"].ID+"/link", `{"other_game_id":"`+byExt["NPWR_PK"].ID+`"}`, true)
 	_ = link.Body.Close()
