@@ -24,16 +24,17 @@ func (s *Syncer) enqueueUnlocksNotice(ctx context.Context) {
 	}
 }
 
-// notifyStatus avisa quando a conta entra num status que pede atenção. ClaimStatusNotification
-// garante uma vez por transição (e no máximo a cada 6 h para erros transitórios).
-func (s *Syncer) notifyStatus(ctx context.Context, integID pgtype.UUID, status, detail string) {
+// notifyStatus avisa o usuário quando a conta precisa de AÇÃO dele (reautenticar a PSN, deixar o
+// perfil Steam público). Erro transitório de sync não é assunto do usuário: vira alerta de operação
+// (Telegram) pelas métricas. ClaimStatusNotification garante um aviso por transição.
+func (s *Syncer) notifyStatus(ctx context.Context, integID pgtype.UUID, status string) {
 	if status == "connected" {
 		if err := s.q.MarkStatusConnected(ctx, integID); err != nil {
 			s.logger.Warn("push: marcar conta conectada falhou", slog.String("err", err.Error()))
 		}
 		return
 	}
-	if status != "needs_reconnect" && status != "error" && status != "error_private" {
+	if status != "needs_reconnect" && status != "error_private" {
 		return
 	}
 	row, err := s.q.ClaimStatusNotification(ctx, dbgen.ClaimStatusNotificationParams{ID: integID, Status: status})
@@ -44,13 +45,13 @@ func (s *Syncer) notifyStatus(ctx context.Context, integID pgtype.UUID, status, 
 		s.logger.Warn("push: registrar aviso de conta falhou", slog.String("err", err.Error()))
 		return
 	}
-	if err := push.Enqueue(ctx, s.queue, statusPayload(row, status, detail), ""); err != nil {
+	if err := push.Enqueue(ctx, s.queue, statusPayload(row, status), ""); err != nil {
 		s.logger.Warn("push: enfileirar aviso de conta falhou", slog.String("err", err.Error()))
 	}
 }
 
 // statusPayload monta o texto do aviso de conta. Separada para teste.
-func statusPayload(row dbgen.ClaimStatusNotificationRow, status, detail string) push.Payload {
+func statusPayload(row dbgen.ClaimStatusNotificationRow, status string) push.Payload {
 	platform := "Steam"
 	if row.Platform == "psn" {
 		platform = "PSN"
@@ -67,14 +68,8 @@ func statusPayload(row dbgen.ClaimStatusNotificationRow, status, detail string) 
 			body = "A conta precisa ser reconectada em Contas."
 		}
 		return push.Payload{Kind: push.KindReconnect, Title: "Reconecte a conta " + account, Body: body, URL: integrationsURL, Tag: tag}
-	case "error_private":
+	default: // error_private
 		return push.Payload{Kind: push.KindReconnect, Title: "Perfil " + account + " ficou privado",
 			Body: "Deixe os detalhes do jogo públicos na Steam para o sync voltar a funcionar.", URL: integrationsURL, Tag: tag}
-	default:
-		body := "O sync está falhando. Ele tenta de novo sozinho; veja o log se continuar."
-		if detail != "" {
-			body = detail
-		}
-		return push.Payload{Kind: push.KindErrors, Title: "Sync da " + account + " com erro", Body: body, URL: "/sync", Tag: tag}
 	}
 }

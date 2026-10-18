@@ -10,7 +10,6 @@ import (
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai/stream"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/metrics"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
-	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
 )
 
 const (
@@ -86,8 +85,7 @@ func (w *Worker) process(ctx context.Context, job queue.Job) {
 // persistente), para a UI não ficar esperando para sempre.
 func (s *Service) giveUp(ctx context.Context, job queue.Job) {
 	const msg = "A IA está indisponível agora (limite de uso). Tente de novo mais tarde."
-	// Alerta de operação (preferência "erros"); dedupe: um só aviso enquanto o anterior estiver na fila.
-	_ = push.Enqueue(ctx, s.queue, push.Payload{Kind: push.KindErrors, Title: "IA sem cota", Body: msg, URL: "/", Tag: "ai-quota"}, "notify:ai-quota")
+	// Falta de cota é assunto de operação: alerta TrophyHunterAIRateLimited (Telegram), não push.
 	switch job.Kind {
 	case KindGuide:
 		var p guidePayload

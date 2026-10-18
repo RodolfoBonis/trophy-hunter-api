@@ -62,3 +62,9 @@ LIMIT $1;
 -- name: DeleteSyncRun :exec
 -- Remove um run órfão (ex.: enfileiramento suprimido por dedupe após criar o run).
 DELETE FROM sync_runs WHERE id = $1;
+
+-- name: CountJobsByKindStatus :many
+-- Retrato da fila para a métrica jobs_queue (done não interessa: só o que espera, roda ou morreu).
+SELECT kind, status, count(*) AS n FROM jobs
+WHERE status IN ('queued', 'running', 'dead')
+GROUP BY kind, status;

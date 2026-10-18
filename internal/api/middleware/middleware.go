@@ -10,10 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/httperr"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/metrics"
 )
 
 // MaxBodyBytes é o teto do corpo aceito nas rotas de escrita (defesa contra payloads grandes).
@@ -110,4 +112,28 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 			next.ServeHTTP(ww, r)
 		})
 	}
+}
+
+// Metrics conta requisições e mede latência por rota (padrão do chi, ex. /api/v1/games/{id}) e
+// classe de status. Probes e /metrics ficam de fora; a stream SSE da IA entra só na contagem.
+func Metrics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/metrics", "/healthz", "/readyz":
+			next.ServeHTTP(w, r)
+			return
+		}
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		start := time.Now()
+		next.ServeHTTP(ww, r)
+		route := "unmatched"
+		if rc := chi.RouteContext(r.Context()); rc != nil && rc.RoutePattern() != "" {
+			route = rc.RoutePattern()
+		}
+		status := ww.Status()
+		if status == 0 {
+			status = http.StatusOK
+		}
+		metrics.ObserveHTTP(r.Method, route, status, time.Since(start), !strings.HasSuffix(route, "/ai/streams/{id}"))
+	})
 }

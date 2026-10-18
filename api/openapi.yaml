@@ -868,12 +868,11 @@ components:
     NotificationPreferences:
       type: object
       additionalProperties: false
-      required: [unlocks, completions, reconnect, errors, ai_ready]
+      required: [unlocks, completions, reconnect, ai_ready]
       properties:
         unlocks: { type: boolean, description: "Troféus novos." }
         completions: { type: boolean, description: "Platina / 100%." }
-        reconnect: { type: boolean, description: "Conta precisa ser reconectada." }
-        errors: { type: boolean, description: "Sync com erro, IA sem cota." }
+        reconnect: { type: boolean, description: "Conta precisa de ação (reautenticar a PSN, perfil Steam privado)." }
         ai_ready: { type: boolean, description: "Guia/roadmap pronto." }
     UnlockEvent:
       type: object

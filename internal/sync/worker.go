@@ -70,6 +70,11 @@ func (w *Worker) Run(ctx context.Context) {
 		defer wg.Done()
 		w.maintenance(ctx)
 	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.reportState(ctx)
+	}()
 
 	w.logger.Info("worker iniciado", slog.Int("concurrency", w.concurrency), slog.Duration("job_timeout", w.jobTimeout))
 	wg.Wait()
@@ -184,4 +189,48 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	case <-t.C:
 		return true
 	}
+}
+
+// stateInterval é a frequência do retrato de estado (fila e contas) publicado em /metrics.
+const stateInterval = time.Minute
+
+// reportState publica a cada minuto o retrato da fila de jobs e da situação de cada conta, lido do
+// banco (fonte da verdade): base dos alertas de operação (fila travada, sync parado, conta em erro).
+func (w *Worker) reportState(ctx context.Context) {
+	ticker := time.NewTicker(stateInterval)
+	defer ticker.Stop()
+	for {
+		w.stateOnce(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (w *Worker) stateOnce(ctx context.Context) {
+	rows, err := w.queries.CountJobsByKindStatus(ctx)
+	if err != nil {
+		w.logger.Warn("métricas: contar fila falhou", slog.String("err", err.Error()))
+		return
+	}
+	integs, err := w.queries.ListIntegrations(ctx)
+	if err != nil {
+		w.logger.Warn("métricas: listar contas falhou", slog.String("err", err.Error()))
+		return
+	}
+	queue := make([]metrics.JobQueueCount, 0, len(rows))
+	for _, r := range rows {
+		queue = append(queue, metrics.JobQueueCount{Kind: r.Kind, Status: r.Status, N: r.N})
+	}
+	accounts := make([]metrics.AccountState, 0, len(integs))
+	for _, i := range integs {
+		a := metrics.AccountState{Platform: i.Platform, Account: i.Label, Status: i.Status}
+		if i.LastSyncedAt.Valid {
+			a.LastSynced = i.LastSyncedAt.Time
+		}
+		accounts = append(accounts, a)
+	}
+	metrics.SetState(queue, accounts)
 }

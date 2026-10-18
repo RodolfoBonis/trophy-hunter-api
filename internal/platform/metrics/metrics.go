@@ -13,6 +13,8 @@
 package metrics
 
 import (
+	"time"
+
 	"net/http"
 	"sync"
 
@@ -55,6 +57,33 @@ var (
 		Help: "Notificações Web Push enviadas, por tipo e resultado.",
 	}, []string{"kind", "result"})
 
+	// httpRequests / httpDuration: tráfego da API por rota (padrão do chi, não o path cru — sem
+	// explosão de cardinalidade) e classe de status. A stream SSE da IA fica fora da latência.
+	httpRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "http_requests_total",
+		Help: "Requisições HTTP da API, por método, rota e classe de status (2xx..5xx).",
+	}, []string{"method", "route", "code"})
+	httpDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "http_request_duration_seconds",
+		Help:    "Latência das requisições HTTP da API, por método e rota.",
+		Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
+	}, []string{"method", "route"})
+
+	// Estado (só no worker, lido do banco a cada minuto): fila de jobs e situação de cada conta.
+	jobsQueue = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "jobs_queue",
+		Help: "Jobs na fila por tipo e status (queued|running|dead).",
+	}, []string{"kind", "status"})
+	accountStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "integration_account_status",
+		Help: "Status atual de cada conta (1 = ativo), por plataforma, conta e status.",
+	}, []string{"platform", "account", "status"})
+	accountLastSync = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "integration_last_synced_timestamp_seconds",
+		Help: "Fim do último sync de cada conta (unix seconds; 0 = nunca).",
+	}, []string{"platform", "account"})
+	stateOnce sync.Once
+
 	// integrationStatus expõe, por plataforma e status, 1 para o status atual e 0 para os demais.
 	// Registrado SÓ no worker (ver EnableIntegrationStatus).
 	integrationStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -72,7 +101,7 @@ func init() {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
-	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed, aiJobs, pushSent)
+	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed, aiJobs, pushSent, httpRequests, httpDuration)
 }
 
 // EnableIntegrationStatus registra e habilita o gauge integration_status. Chamado SÓ pelo worker.
@@ -120,6 +149,65 @@ func SetIntegrationStatus(platform, current string) {
 			v = 1.0
 		}
 		integrationStatus.WithLabelValues(platform, s).Set(v)
+	}
+}
+
+// ObserveHTTP registra uma requisição da API. withLatency=false para conexões longas (SSE).
+func ObserveHTTP(method, route string, status int, d time.Duration, withLatency bool) {
+	httpRequests.WithLabelValues(method, route, statusClass(status)).Inc()
+	if withLatency {
+		httpDuration.WithLabelValues(method, route).Observe(d.Seconds())
+	}
+}
+
+func statusClass(status int) string {
+	switch {
+	case status >= 500:
+		return "5xx"
+	case status >= 400:
+		return "4xx"
+	case status >= 300:
+		return "3xx"
+	default:
+		return "2xx"
+	}
+}
+
+// JobQueueCount é uma linha da contagem da fila.
+type JobQueueCount struct {
+	Kind, Status string
+	N            int64
+}
+
+// AccountState é a situação de uma conta.
+type AccountState struct {
+	Platform, Account, Status string
+	LastSynced                time.Time // zero = nunca
+}
+
+// SetState publica o retrato atual da fila e das contas (substitui o anterior: contas removidas e
+// filas esvaziadas somem). Só o worker chama.
+func SetState(queue []JobQueueCount, accounts []AccountState) {
+	stateOnce.Do(func() { registry.MustRegister(jobsQueue, accountStatus, accountLastSync) })
+	jobsQueue.Reset()
+	for _, q := range queue {
+		jobsQueue.WithLabelValues(q.Kind, q.Status).Set(float64(q.N))
+	}
+	accountStatus.Reset()
+	accountLastSync.Reset()
+	for _, a := range accounts {
+		for _, st := range []string{"connected", "needs_reconnect", "error_private", "error", "disabled"} {
+			v := 0.0
+			if st == a.Status {
+				v = 1
+			}
+			accountStatus.WithLabelValues(a.Platform, a.Account, st).Set(v)
+		}
+		ts := 0.0
+		if !a.LastSynced.IsZero() {
+			ts = float64(a.LastSynced.Unix())
+		}
+		accountLastSync.WithLabelValues(a.Platform, a.Account).Set(ts)
 	}
 }
 

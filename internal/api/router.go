@@ -46,6 +46,7 @@ func NewRouter(d RouterDeps) http.Handler {
 	// RequestLogger POR FORA do Recoverer: panics viram 500 no Recoverer interno e são logados aqui
 	// com o status correto.
 	r.Use(middleware.RequestLogger(d.Logger))
+	r.Use(middleware.Metrics)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.SecurityHeaders)
 	r.Use(middleware.CORS(d.CORSAllowedOrigins))

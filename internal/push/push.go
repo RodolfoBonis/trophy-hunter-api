@@ -1,6 +1,8 @@
 // Package push envia notificações Web Push (VAPID) para os navegadores inscritos e decide o que
-// notificar: desbloqueios (agregados), platina/100%, conta para reconectar, erros de sync/IA e guias
-// prontos — respeitando as preferências do usuário (settings "notifications").
+// notificar ao USUÁRIO: desbloqueios (agregados), platina/100%, conta que precisa de ação dele
+// (reautenticar a PSN, perfil Steam privado) e guias prontos — respeitando as preferências (settings
+// "notifications"). Problemas de operação (sync falhando, IA sem cota, fila travada) NÃO viram push:
+// são alertas do Prometheus → Alertmanager → Telegram (apps/trophy-hunter/monitoring no k3s-apps).
 //
 // O envio é sempre assíncrono: quem detecta o evento enfileira um job `notify` (Enqueue) e o worker
 // de sync, único processo com a chave privada VAPID, entrega (Service.HandleJob). A API só envia o
@@ -36,8 +38,7 @@ type Kind string
 const (
 	KindUnlocks     Kind = "unlocks"     // troféus novos (agregados) — calculado na hora do envio
 	KindCompletions Kind = "completions" // platina / 100% — sai junto com KindUnlocks
-	KindReconnect   Kind = "reconnect"   // conta precisa de NPSSO/chave nova
-	KindErrors      Kind = "errors"      // sync falhando, IA sem cota
+	KindReconnect   Kind = "reconnect"   // conta precisa de ação do usuário (NPSSO novo, perfil público)
 	KindAIReady     Kind = "ai_ready"    // guia/roadmap pronto
 	KindTest        Kind = "test"        // botão "Enviar teste" (ignora preferências)
 )
@@ -311,13 +312,12 @@ type Preferences struct {
 	Unlocks     bool `json:"unlocks"`
 	Completions bool `json:"completions"`
 	Reconnect   bool `json:"reconnect"`
-	Errors      bool `json:"errors"`
 	AIReady     bool `json:"ai_ready"`
 }
 
 // DefaultPreferences devolve tudo ligado.
 func DefaultPreferences() Preferences {
-	return Preferences{Unlocks: true, Completions: true, Reconnect: true, Errors: true, AIReady: true}
+	return Preferences{Unlocks: true, Completions: true, Reconnect: true, AIReady: true}
 }
 
 // Allows indica se o tipo está ligado.
@@ -329,8 +329,6 @@ func (p Preferences) Allows(k Kind) bool {
 		return p.Completions
 	case KindReconnect:
 		return p.Reconnect
-	case KindErrors:
-		return p.Errors
 	case KindAIReady:
 		return p.AIReady
 	default:

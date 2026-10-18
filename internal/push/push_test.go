@@ -37,7 +37,7 @@ func TestUnlockMessages(t *testing.T) {
 
 func TestPreferencesAllows(t *testing.T) {
 	p := DefaultPreferences()
-	for _, k := range []Kind{KindUnlocks, KindCompletions, KindReconnect, KindErrors, KindAIReady, KindTest} {
+	for _, k := range []Kind{KindUnlocks, KindCompletions, KindReconnect, KindAIReady, KindTest} {
 		require.True(t, p.Allows(k), k)
 	}
 	p.AIReady = false

@@ -11,6 +11,39 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countJobsByKindStatus = `-- name: CountJobsByKindStatus :many
+SELECT kind, status, count(*) AS n FROM jobs
+WHERE status IN ('queued', 'running', 'dead')
+GROUP BY kind, status
+`
+
+type CountJobsByKindStatusRow struct {
+	Kind   string
+	Status string
+	N      int64
+}
+
+// Retrato da fila para a métrica jobs_queue (done não interessa: só o que espera, roda ou morreu).
+func (q *Queries) CountJobsByKindStatus(ctx context.Context) ([]CountJobsByKindStatusRow, error) {
+	rows, err := q.db.Query(ctx, countJobsByKindStatus)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountJobsByKindStatusRow{}
+	for rows.Next() {
+		var i CountJobsByKindStatusRow
+		if err := rows.Scan(&i.Kind, &i.Status, &i.N); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteSyncRun = `-- name: DeleteSyncRun :exec
 DELETE FROM sync_runs WHERE id = $1
 `

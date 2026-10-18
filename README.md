@@ -144,10 +144,13 @@ assinatura → o job é reagendado com backoff. Para rodar local: `CLAUDE_CODE_O
   busca `GET /events/unseen` (toast/cerimônia de platina) e marca com `POST /events/seen`.
 - **Web push:** o navegador se inscreve (`POST /push/subscriptions`) com a chave pública de
   `GET /push/key`. Quem detecta um evento enfileira um job `notify`; o worker de sync (único com a
-  chave privada VAPID) entrega. Gatilhos: troféus novos e platina/100% (fim de cada sync, agregados),
-  conta para reconectar / com erro (uma vez por transição; erros transitórios no máximo a cada 6 h),
-  guia/roadmap pronto e IA sem cota (ai-worker). Preferências por tipo em
-  `/notifications/preferences`. 404/410 do push service removem a inscrição.
+  chave privada VAPID) entrega. Só o que é do usuário: troféus novos e platina/100% (fim de cada sync,
+  agregados), conta que precisa de ação dele (reautenticar a PSN, perfil Steam privado — uma vez por
+  transição) e guia/roadmap pronto. Preferências por tipo em `/notifications/preferences`. 404/410 do
+  push service removem a inscrição.
+- **Alertas de operação** (sync falhando, IA sem cota, fila travada, 5xx, pods fora do ar) NÃO são push:
+  são regras do Prometheus em `k3s-apps/apps/trophy-hunter/monitoring` → Alertmanager → Telegram
+  (canal de alertas), a partir das métricas da API e dos workers.
 
 ## Rotação da chave de criptografia
 

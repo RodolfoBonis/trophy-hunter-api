@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -70,4 +71,15 @@ func TestUnlockEventsFeedTheToasts(t *testing.T) {
 	_ = res.Body.Close()
 	require.Equal(t, http.StatusNoContent, res.StatusCode)
 	require.Empty(t, call[[]unlockEvent](t, e, http.MethodGet, "/api/v1/events/unseen", "", http.StatusOK))
+}
+
+func TestHTTPMetricsUseRoutePattern(t *testing.T) {
+	e := setup(t)
+	res := e.do(t, http.MethodGet, "/api/v1/games/00000000-0000-0000-0000-000000000001", "", true)
+	_ = res.Body.Close()
+	m := e.do(t, http.MethodGet, "/metrics", "", false)
+	defer func() { _ = m.Body.Close() }()
+	body, _ := io.ReadAll(m.Body)
+	require.Contains(t, string(body), `route="/api/v1/games/{id}"`, "rota pelo padrão do chi, não pelo id")
+	require.NotContains(t, string(body), "00000000-0000-0000-0000-000000000001")
 }

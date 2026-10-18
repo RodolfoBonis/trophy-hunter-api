@@ -59,7 +59,7 @@ func TestPushSubscriptionTestAndPreferences(t *testing.T) {
 
 	prefs := call[push.Preferences](t, e, http.MethodGet, "/api/v1/notifications/preferences", "", http.StatusOK)
 	require.Equal(t, push.DefaultPreferences(), prefs)
-	saved := call[push.Preferences](t, e, http.MethodPut, "/api/v1/notifications/preferences", `{"unlocks":true,"completions":true,"reconnect":true,"errors":false,"ai_ready":false}`, http.StatusOK)
+	saved := call[push.Preferences](t, e, http.MethodPut, "/api/v1/notifications/preferences", `{"unlocks":true,"completions":true,"reconnect":true,"ai_ready":false}`, http.StatusOK)
 	require.False(t, saved.AIReady)
 	call[struct{}](t, e, http.MethodPut, "/api/v1/notifications/preferences", `{"desconhecido":true}`, http.StatusBadRequest)
 
