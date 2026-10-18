@@ -26,8 +26,9 @@ RETURNING *;
 UPDATE users SET email = $2, name = $3, last_seen_at = now(), updated_at = now() WHERE id = $1;
 
 -- name: ActivateUser :one
+-- pending (1º convite) ou removed (readmissão com um convite novo; os dados não apagados voltam).
 UPDATE users SET status = 'active', invited_by = $2, updated_at = now()
-WHERE id = $1 AND status = 'pending'
+WHERE id = $1 AND status IN ('pending', 'removed')
 RETURNING *;
 
 -- name: ListMembers :many

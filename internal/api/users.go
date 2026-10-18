@@ -222,17 +222,14 @@ func (h *Handlers) revokeInvite(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// acceptInvite — POST /invites/{code}/accept: quem está "pending" vira membro.
+// acceptInvite — POST /invites/{code}/accept: quem está "pending" (ou foi removido) vira membro.
 func (h *Handlers) acceptInvite(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	if u.Status == "active" {
 		writeJSON(w, http.StatusOK, toMeDTO(u))
 		return
 	}
-	if u.Status == "removed" {
-		httperr.Write(w, r, httperr.New(httperr.KindForbidden, "Acesso removido", "o dono removeu seu acesso").WithCode("member_removed"))
-		return
-	}
+	// pending ou removed: um convite válido (novo) dá/devolve o acesso.
 	code := strings.TrimSpace(chi.URLParam(r, "code"))
 	by, err := h.q.ConsumeInvite(r.Context(), hashInviteCode(code))
 	if errors.Is(err, pgx.ErrNoRows) {

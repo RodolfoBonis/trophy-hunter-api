@@ -13,7 +13,7 @@ import (
 
 const activateUser = `-- name: ActivateUser :one
 UPDATE users SET status = 'active', invited_by = $2, updated_at = now()
-WHERE id = $1 AND status = 'pending'
+WHERE id = $1 AND status IN ('pending', 'removed')
 RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at
 `
 
@@ -22,6 +22,7 @@ type ActivateUserParams struct {
 	InvitedBy pgtype.UUID
 }
 
+// pending (1º convite) ou removed (readmissão com um convite novo; os dados não apagados voltam).
 func (q *Queries) ActivateUser(ctx context.Context, arg ActivateUserParams) (User, error) {
 	row := q.db.QueryRow(ctx, activateUser, arg.ID, arg.InvitedBy)
 	var i User

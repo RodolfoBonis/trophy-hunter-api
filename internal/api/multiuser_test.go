@@ -186,6 +186,12 @@ func TestMultiUserIsolationAndInvites(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, res.StatusCode)
 	gone := callAs[problem](t, e, friendSub, friendEmail, http.MethodGet, "/api/v1/games", "", http.StatusForbidden)
 	require.Equal(t, "member_removed", gone.Code)
+	// Readmissão: um convite novo devolve o acesso (e os dados que não foram apagados).
+	inviteFriend(t, e)
+	back := callAs[struct {
+		Total int `json:"total"`
+	}](t, e, friendSub, friendEmail, http.MethodGet, "/api/v1/games", "", http.StatusOK)
+	require.Positive(t, back.Total, "os jogos do amigo voltam com ele")
 	res = e.do(t, http.MethodDelete, "/api/v1/admin/members/"+friendID+"?purge=true", "", true)
 	_ = res.Body.Close()
 	require.Equal(t, http.StatusNoContent, res.StatusCode)

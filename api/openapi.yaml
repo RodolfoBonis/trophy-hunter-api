@@ -800,7 +800,7 @@ paths:
     post:
       tags: [me]
       operationId: acceptInvite
-      summary: Aceita um convite — quem logou e está "pending" vira membro.
+      summary: Aceita um convite — quem está "pending" (ou foi removido sem purge) vira membro ativo.
       parameters:
         - name: code
           in: path
@@ -813,7 +813,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/User" }
         "401": { $ref: "#/components/responses/Problem" }
-        "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
   /admin/invites:
