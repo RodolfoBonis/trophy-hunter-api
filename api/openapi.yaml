@@ -770,6 +770,27 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
 
+  /search:
+    get:
+      tags: [games]
+      operationId: search
+      summary: Busca da paleta de comandos — jogos (até 8) e troféus (até 12). Mínimo de 2 caracteres.
+      description: >
+        Só a conta mais avançada de cada jogo. Troféus ocultos ainda não obtidos não aparecem.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, maxLength: 100 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchResult" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -794,6 +815,38 @@ components:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
   schemas:
+    SearchResult:
+      type: object
+      required: [games, trophies]
+      properties:
+        games:
+          type: array
+          items:
+            type: object
+            required: [id, title, platform, external_id, cover, hero, completion_pct]
+            properties:
+              id: { type: string, format: uuid }
+              title: { type: string }
+              platform: { $ref: "#/components/schemas/Platform" }
+              external_id: { type: string }
+              cover: { type: string }
+              hero: { type: string }
+              completion_pct: { type: number }
+        trophies:
+          type: array
+          items:
+            type: object
+            required: [id, name, type, icon, earned, rarity_pct, game_id, game_title, platform]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              type: { $ref: "#/components/schemas/TrophyType" }
+              icon: { type: string }
+              earned: { type: boolean }
+              rarity_pct: { type: [number, "null"] }
+              game_id: { type: string, format: uuid }
+              game_title: { type: string }
+              platform: { $ref: "#/components/schemas/Platform" }
     PushStatus:
       type: object
       required: [enabled, public_key, subscriptions]

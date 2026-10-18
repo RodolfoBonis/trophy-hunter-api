@@ -80,6 +80,7 @@ func NewRouter(d RouterDeps) http.Handler {
 			r.Delete("/integrations/{id}", h.deleteIntegration)
 			r.Post("/integrations/{id}/sync", h.syncIntegration)
 
+			r.Get("/search", h.search)
 			r.Get("/games", h.listGames)
 			r.Get("/games/{id}", h.getGame)
 			r.Post("/games/{id}/sync", h.syncGame)
