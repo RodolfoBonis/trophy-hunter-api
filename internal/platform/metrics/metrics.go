@@ -49,6 +49,12 @@ var (
 		Help: "Execuções da IA (guias e chat), por tipo e resultado.",
 	}, []string{"kind", "result"})
 
+	// pushSent conta envios de web push por tipo e resultado (ok|gone|error).
+	pushSent = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "push_sent_total",
+		Help: "Notificações Web Push enviadas, por tipo e resultado.",
+	}, []string{"kind", "result"})
+
 	// integrationStatus expõe, por plataforma e status, 1 para o status atual e 0 para os demais.
 	// Registrado SÓ no worker (ver EnableIntegrationStatus).
 	integrationStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -66,7 +72,7 @@ func init() {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
-	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed, aiJobs)
+	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed, aiJobs, pushSent)
 }
 
 // EnableIntegrationStatus registra e habilita o gauge integration_status. Chamado SÓ pelo worker.
@@ -90,6 +96,11 @@ func SyncRun(scope, status string) {
 // JobProcessed registra o resultado do processamento de um job.
 func JobProcessed(kind, result string) {
 	jobsProcessed.WithLabelValues(kind, result).Inc()
+}
+
+// PushSent registra um envio de web push.
+func PushSent(kind, result string) {
+	pushSent.WithLabelValues(kind, result).Inc()
 }
 
 // AIJob registra uma execução da IA.

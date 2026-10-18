@@ -19,6 +19,7 @@ import (
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai/stream"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/metrics"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
 )
 
 // Escopos de guia e tipos de job.
@@ -207,6 +208,7 @@ func (s *Service) handleGuide(ctx context.Context, p guidePayload) error {
 		return err
 	}
 	req := claude.Request{SystemPrompt: systemPrompt, Model: s.guideModel, AllowedTools: AllowedTools, Workdir: s.dir("guides")}
+	var ready push.Payload // aviso de "pronto" (enviado só se o usuário quiser; ver push.Preferences)
 	switch guide.Scope {
 	case ScopeTrophy:
 		tid, err := parseUUID(p.TrophyID)
@@ -218,12 +220,14 @@ func (s *Service) handleGuide(ctx context.Context, p guidePayload) error {
 			return s.failGuide(ctx, guide, "troféu não encontrado (sincronize o jogo e tente de novo)")
 		}
 		req.Prompt, req.JSONSchema = trophyGuidePrompt(t), TrophyGuideSchema
+		ready = push.Payload{Kind: push.KindAIReady, Title: "Guia pronto: " + t.Name, Body: t.GameTitle, URL: "/games/" + uuidString(t.GameID), Tag: "ai-" + p.GuideID}
 	default:
 		game, trophies, err := s.gameContext(ctx, p.GameID)
 		if err != nil {
 			return s.failGuide(ctx, guide, "jogo não encontrado (sincronize e tente de novo)")
 		}
 		req.Prompt, req.JSONSchema = roadmapPrompt(game, trophies), RoadmapSchema
+		ready = push.Payload{Kind: push.KindAIReady, Title: "Roadmap pronto", Body: game.Title, URL: "/games/" + uuidString(game.ID), Tag: "ai-" + p.GuideID}
 	}
 
 	if err := s.q.MarkGuideRunning(ctx, guide.ID); err != nil {
@@ -252,6 +256,9 @@ func (s *Service) handleGuide(ctx context.Context, p guidePayload) error {
 	}
 	metrics.AIJob(guide.Scope, "ok")
 	_ = pub.Close(ctx, stream.TypeDone, "")
+	if err := push.Enqueue(ctx, s.queue, ready, ""); err != nil {
+		s.logger.Warn("ai: enfileirar aviso de guia pronto falhou", slog.String("err", err.Error()))
+	}
 	return nil
 }
 

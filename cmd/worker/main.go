@@ -24,6 +24,7 @@ import (
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
 	redisplat "github.com/RodolfoBonis/trophy-hunter-api/internal/platform/redis"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/telemetry"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
 	syncpkg "github.com/RodolfoBonis/trophy-hunter-api/internal/sync"
 
 	"github.com/redis/go-redis/v9"
@@ -89,9 +90,13 @@ func run() error {
 	steamFactory := func(apiKey string) syncpkg.SteamAPI {
 		return steam.New(steam.Options{BaseURL: cfg.Steam.BaseURL, APIKey: apiKey, Lang: cfg.Steam.Lang, RPS: cfg.Steam.RPS, Logger: logger})
 	}
+	notifier := push.New(queries, push.Config{PublicKey: cfg.Push.VAPIDPublicKey, PrivateKey: cfg.Push.VAPIDPrivateKey, Subject: cfg.Push.VAPIDSubject}, nil, logger)
+	if !notifier.Enabled() {
+		logger.Warn("web push desligado: VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY ausentes")
+	}
 	syncer := syncpkg.New(syncpkg.Deps{
 		Queries: queries, Pool: pool, Queue: jobs, Cipher: cipher,
-		SteamFactory: steamFactory, Logger: logger,
+		SteamFactory: steamFactory, Logger: logger, Notifier: notifier,
 		PSN: psn.New(psn.Options{AuthBaseURL: cfg.PSN.AuthBaseURL, APIBaseURL: cfg.PSN.APIBaseURL, Lang: cfg.PSN.Lang, RPS: cfg.PSN.RPS, Burst: cfg.PSN.Burst, Logger: logger}),
 	})
 

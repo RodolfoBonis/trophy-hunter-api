@@ -1,6 +1,8 @@
 package sync
 
 import (
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
+
 	"context"
 	"errors"
 	"log/slog"
@@ -78,7 +80,7 @@ func (w *Worker) loop(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		job, err := w.queue.Claim(ctx, defaultLease, KindSyncPlatform, KindSyncGame)
+		job, err := w.queue.Claim(ctx, defaultLease, KindSyncPlatform, KindSyncGame, push.JobKind)
 		if err != nil {
 			w.logger.Error("claim falhou", slog.String("err", err.Error()))
 			if !sleepCtx(ctx, emptyPollDelay) {

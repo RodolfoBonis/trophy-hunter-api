@@ -20,6 +20,8 @@ tags:
   - name: integrations
   - name: games
   - name: sync
+  - name: push
+    description: Web push (VAPID) e preferências de notificação.
   - name: ai
     description: >
       Guias por troféu, roadmap de platina e chat por jogo, gerados por IA (Claude Code headless no
@@ -673,6 +675,101 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
 
+  /push/key:
+    get:
+      tags: [push]
+      operationId: pushStatus
+      summary: Se o web push está ligado, a chave pública VAPID e quantos aparelhos estão inscritos.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PushStatus" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /push/subscriptions:
+    post:
+      tags: [push]
+      operationId: subscribePush
+      summary: Grava (ou atualiza) a inscrição deste navegador (PushSubscription.toJSON()).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PushSubscriptionRequest" }
+      responses:
+        "201": { description: Inscrito }
+        "401": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [push]
+      operationId: unsubscribePush
+      summary: Remove a inscrição deste navegador.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint]
+              properties:
+                endpoint: { type: string }
+      responses:
+        "204": { description: Removida }
+        "401": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /push/test:
+    post:
+      tags: [push]
+      operationId: testPush
+      summary: Envia agora uma notificação de teste para todos os aparelhos.
+      responses:
+        "200":
+          description: Resultado do envio
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sent, failed, removed]
+                properties:
+                  sent: { type: integer }
+                  failed: { type: integer }
+                  removed: { type: integer, description: "Inscrições expiradas (404/410) removidas." }
+        "401": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /notifications/preferences:
+    get:
+      tags: [push]
+      operationId: getNotificationPreferences
+      summary: Quais tipos de notificação estão ligados (padrão = todos).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationPreferences" }
+        "401": { $ref: "#/components/responses/Problem" }
+    put:
+      tags: [push]
+      operationId: putNotificationPreferences
+      summary: Grava as preferências (objeto completo).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationPreferences" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationPreferences" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -697,6 +794,34 @@ components:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
   schemas:
+    PushStatus:
+      type: object
+      required: [enabled, public_key, subscriptions]
+      properties:
+        enabled: { type: boolean, description: "false = chaves VAPID não configuradas no servidor." }
+        public_key: { type: string, description: "applicationServerKey (base64url)." }
+        subscriptions: { type: integer }
+    PushSubscriptionRequest:
+      type: object
+      required: [endpoint, keys]
+      properties:
+        endpoint: { type: string, description: "URL https do push service do navegador." }
+        keys:
+          type: object
+          required: [p256dh, auth]
+          properties:
+            p256dh: { type: string }
+            auth: { type: string }
+    NotificationPreferences:
+      type: object
+      additionalProperties: false
+      required: [unlocks, completions, reconnect, errors, ai_ready]
+      properties:
+        unlocks: { type: boolean, description: "Troféus novos." }
+        completions: { type: boolean, description: "Platina / 100%." }
+        reconnect: { type: boolean, description: "Conta precisa ser reconectada." }
+        errors: { type: boolean, description: "Sync com erro, IA sem cota." }
+        ai_ready: { type: boolean, description: "Guia/roadmap pronto." }
     UnlockEvent:
       type: object
       required: [id, detected_at, trophy_id, name, description, type, icon, rarity_pct, earned_at, game_id, game_title, platform, external_id, cover, hero, completes_game]

@@ -100,6 +100,14 @@ func NewRouter(d RouterDeps) http.Handler {
 			r.Get("/events/unseen", h.listUnseenUnlocks)
 			r.Post("/events/seen", h.markUnlocksSeen)
 
+			// Web push e preferências de notificação.
+			r.Get("/push/key", h.pushStatus)
+			r.Post("/push/subscriptions", h.subscribePush)
+			r.Delete("/push/subscriptions", h.unsubscribePush)
+			r.Post("/push/test", h.testPush)
+			r.Get("/notifications/preferences", h.getNotificationPrefs)
+			r.Put("/notifications/preferences", h.putNotificationPrefs)
+
 			// IA: guias, roadmap e chat (geração assíncrona; resposta em /ai/streams/{id}).
 			r.Get("/trophies/{id}/guide", h.getTrophyGuide)
 			r.Post("/trophies/{id}/guide", h.generateTrophyGuide)

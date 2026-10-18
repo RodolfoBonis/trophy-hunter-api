@@ -39,6 +39,7 @@ type Config struct {
 	Steam             Steam
 	PSN               PSN
 	AI                AI
+	Push              Push
 	WorkerConcurrency int `env:"WORKER_CONCURRENCY" envDefault:"4"`
 }
 
@@ -281,4 +282,13 @@ type AI struct {
 	Home string `env:"AI_HOME" envDefault:"/home/node"`
 	// Workdir é a raiz dos cwd da CLI (um por conversa: o --resume exige o mesmo cwd).
 	Workdir string `env:"AI_WORKDIR" envDefault:"/home/node/work"`
+}
+
+// Push configura o Web Push (VAPID). Sem as chaves o push fica desligado (a UI mostra isso).
+// A chave privada é SEGREDO (Vault k3s/trophy-hunter/prod/app); a pública vai para o navegador.
+type Push struct {
+	VAPIDPublicKey  string `env:"VAPID_PUBLIC_KEY"`
+	VAPIDPrivateKey string `env:"VAPID_PRIVATE_KEY"`
+	// VAPIDSubject identifica o remetente para os push services (URL do app; não expor e-mail).
+	VAPIDSubject string `env:"VAPID_SUBJECT" envDefault:"https://trophy.rodolfodebonis.com.br"`
 }

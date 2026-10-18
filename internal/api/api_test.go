@@ -22,6 +22,7 @@ import (
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/config"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/crypto"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
 	syncpkg "github.com/RodolfoBonis/trophy-hunter-api/internal/sync"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/testsupport"
 )
@@ -63,6 +64,7 @@ type testEnv struct {
 	queue queue.Queue
 	sync  *syncpkg.Syncer
 	ai    *ai.Service
+	push  *recordingPush
 }
 
 func setup(t *testing.T) *testEnv {
@@ -85,6 +87,7 @@ func setupFull(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI
 func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, runner ai.Runner) *testEnv {
 	t.Helper()
 	pool := testsupport.NewPostgres(t)
+	pushSender := &recordingPush{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	k := make([]byte, 32)
@@ -94,8 +97,10 @@ func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, ru
 
 	q := dbgen.New(pool)
 	jobs := queue.NewPostgres(pool, queue.DefaultBackoff)
+	notifier := push.New(q, push.Config{PublicKey: "BPUB", PrivateKey: "priv"}, pushSender, logger)
 	syncer := syncpkg.New(syncpkg.Deps{
-		Queries: q, Pool: pool, Queue: jobs, Cipher: cipher,
+		Notifier: notifier,
+		Queries:  q, Pool: pool, Queue: jobs, Cipher: cipher,
 		SteamFactory: factory,
 		PSN:          psnAPI,
 		Logger:       logger,
@@ -103,7 +108,7 @@ func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, ru
 
 	authn := auth.New(context.Background(), config.Auth{Mode: config.AuthModeDev, RequiredRole: "trophy-hunter-user"}, logger)
 
-	deps := api.HandlerDeps{Queries: q, Pool: pool, Syncer: syncer, Logger: logger}
+	deps := api.HandlerDeps{Queries: q, Pool: pool, Syncer: syncer, Logger: logger, Push: notifier}
 	var aiSvc *ai.Service
 	if runner != nil {
 		rdb := testsupport.NewRedis(t)
@@ -114,7 +119,7 @@ func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, ru
 	router := api.NewRouter(api.RouterDeps{Handlers: handlers, Auth: authn, Logger: logger, ServiceName: "test"})
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
-	return &testEnv{srv: srv, q: q, queue: jobs, sync: syncer, ai: aiSvc}
+	return &testEnv{srv: srv, q: q, queue: jobs, sync: syncer, ai: aiSvc, push: pushSender}
 }
 
 func (e *testEnv) do(t *testing.T, method, path, body string, auth bool) *http.Response {
@@ -141,7 +146,7 @@ func (e *testEnv) drain(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
 	for i := 0; i < 100; i++ {
-		job, err := e.queue.Claim(ctx, time.Minute, syncpkg.KindSyncPlatform, syncpkg.KindSyncGame)
+		job, err := e.queue.Claim(ctx, time.Minute, syncpkg.KindSyncPlatform, syncpkg.KindSyncGame, push.JobKind)
 		require.NoError(t, err)
 		if job == nil {
 			return

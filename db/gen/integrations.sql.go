@@ -18,7 +18,7 @@ INSERT INTO integrations (
 ) VALUES (
     $1, $2, 'connected', $3, $4, $5, $6, $7, '', false, now()
 )
-RETURNING id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label
+RETURNING id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at
 `
 
 type CreateIntegrationParams struct {
@@ -61,6 +61,8 @@ func (q *Queries) CreateIntegration(ctx context.Context, arg CreateIntegrationPa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Label,
+		&i.NotifiedStatus,
+		&i.NotifiedAt,
 	)
 	return i, err
 }
@@ -77,7 +79,7 @@ func (q *Queries) DeleteIntegration(ctx context.Context, id pgtype.UUID) error {
 
 const getIntegration = `-- name: GetIntegration :one
 
-SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label FROM integrations WHERE id = $1
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at FROM integrations WHERE id = $1
 `
 
 // Integrações: várias contas por plataforma (ver migration 00013). Tudo é endereçado pelo id.
@@ -101,12 +103,14 @@ func (q *Queries) GetIntegration(ctx context.Context, id pgtype.UUID) (Integrati
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Label,
+		&i.NotifiedStatus,
+		&i.NotifiedAt,
 	)
 	return i, err
 }
 
 const getIntegrationByAccount = `-- name: GetIntegrationByAccount :one
-SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label FROM integrations WHERE platform = $1 AND account_id = $2
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at FROM integrations WHERE platform = $1 AND account_id = $2
 `
 
 type GetIntegrationByAccountParams struct {
@@ -134,12 +138,14 @@ func (q *Queries) GetIntegrationByAccount(ctx context.Context, arg GetIntegratio
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Label,
+		&i.NotifiedStatus,
+		&i.NotifiedAt,
 	)
 	return i, err
 }
 
 const listIntegrations = `-- name: ListIntegrations :many
-SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label FROM integrations ORDER BY platform, created_at
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at FROM integrations ORDER BY platform, created_at
 `
 
 func (q *Queries) ListIntegrations(ctx context.Context) ([]Integration, error) {
@@ -168,6 +174,8 @@ func (q *Queries) ListIntegrations(ctx context.Context) ([]Integration, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Label,
+			&i.NotifiedStatus,
+			&i.NotifiedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -180,7 +188,7 @@ func (q *Queries) ListIntegrations(ctx context.Context) ([]Integration, error) {
 }
 
 const listIntegrationsByPlatform = `-- name: ListIntegrationsByPlatform :many
-SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label FROM integrations WHERE platform = $1 ORDER BY created_at
+SELECT id, platform, status, account_id, display_name, avatar, credentials_enc, key_version, access_token_expires_at, refresh_token_expires_at, last_error, last_synced_at, initial_sync_done, created_at, updated_at, label, notified_status, notified_at FROM integrations WHERE platform = $1 ORDER BY created_at
 `
 
 func (q *Queries) ListIntegrationsByPlatform(ctx context.Context, platform string) ([]Integration, error) {
@@ -209,6 +217,8 @@ func (q *Queries) ListIntegrationsByPlatform(ctx context.Context, platform strin
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Label,
+			&i.NotifiedStatus,
+			&i.NotifiedAt,
 		); err != nil {
 			return nil, err
 		}

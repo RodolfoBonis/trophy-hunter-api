@@ -24,6 +24,7 @@ import (
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
 	redisplat "github.com/RodolfoBonis/trophy-hunter-api/internal/platform/redis"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/telemetry"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
 	syncpkg "github.com/RodolfoBonis/trophy-hunter-api/internal/sync"
 )
 
@@ -102,6 +103,7 @@ func run() error {
 	handlers := api.NewHandlers(api.HandlerDeps{
 		Queries: queries, Pool: pool, Syncer: syncer, Logger: logger,
 		AI: aiSvc, Redis: rdb,
+		Push:      push.New(queries, push.Config{PublicKey: cfg.Push.VAPIDPublicKey, PrivateKey: cfg.Push.VAPIDPrivateKey, Subject: cfg.Push.VAPIDSubject}, nil, logger),
 		AuthReady: authenticator.Ready,
 	})
 	router := api.NewRouter(api.RouterDeps{

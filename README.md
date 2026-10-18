@@ -138,6 +138,17 @@ se a sessão sumir (pod recriado), recomeça com o histórico recente no prompt.
 assinatura → o job é reagendado com backoff. Para rodar local: `CLAUDE_CODE_OAUTH_TOKEN=… go run
 ./cmd/ai-worker` (precisa do `claude` no PATH e do Redis).
 
+## Avisos e notificações
+
+- **Avisos no app:** o sync grava `unlock_events` para troféus obtidos DEPOIS do sync inicial; o web
+  busca `GET /events/unseen` (toast/cerimônia de platina) e marca com `POST /events/seen`.
+- **Web push:** o navegador se inscreve (`POST /push/subscriptions`) com a chave pública de
+  `GET /push/key`. Quem detecta um evento enfileira um job `notify`; o worker de sync (único com a
+  chave privada VAPID) entrega. Gatilhos: troféus novos e platina/100% (fim de cada sync, agregados),
+  conta para reconectar / com erro (uma vez por transição; erros transitórios no máximo a cada 6 h),
+  guia/roadmap pronto e IA sem cota (ai-worker). Preferências por tipo em
+  `/notifications/preferences`. 404/410 do push service removem a inscrição.
+
 ## Rotação da chave de criptografia
 
 As credenciais de integração são cifradas com `TOKEN_ENC_KEY` (AES-256-GCM), e o `key_version`

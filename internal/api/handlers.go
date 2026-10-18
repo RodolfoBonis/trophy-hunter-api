@@ -6,6 +6,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
 
 	"log/slog"
 	"net/http"
@@ -23,6 +24,7 @@ type Handlers struct {
 	syncer          *syncpkg.Syncer
 	ai              *ai.Service
 	rdb             *redis.Client
+	push            *push.Service
 	logger          *slog.Logger
 	almostThreshold float64
 	authReady       func() bool
@@ -34,8 +36,10 @@ type HandlerDeps struct {
 	Pool    *pgxpool.Pool
 	Syncer  *syncpkg.Syncer
 	// AI enfileira guias/chat; Redis é o canal da resposta em tempo real (SSE). nil = IA desligada.
-	AI              *ai.Service
-	Redis           *redis.Client
+	AI    *ai.Service
+	Redis *redis.Client
+	// Push envia o teste e expõe a chave pública VAPID (nil/sem chaves = push desligado).
+	Push            *push.Service
 	Logger          *slog.Logger
 	AlmostThreshold float64
 	// AuthReady indica se o autenticador já carregou o provider OIDC (readyz). nil = sempre pronto.
@@ -58,6 +62,7 @@ func NewHandlers(d HandlerDeps) *Handlers {
 		syncer:          d.Syncer,
 		ai:              d.AI,
 		rdb:             d.Redis,
+		push:            d.Push,
 		logger:          d.Logger,
 		almostThreshold: at,
 		authReady:       authReady,

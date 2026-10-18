@@ -158,6 +158,7 @@ func (s *Syncer) ReconnectPSN(ctx context.Context, integrationID pgtype.UUID, np
 		return dbgen.Integration{}, err
 	}
 	s.setStatus("psn", "connected")
+	s.notifyStatus(ctx, integ.ID, "connected", "")
 	if _, _, err := s.EnqueuePlatformSync(ctx, integ.ID, ScopeIncremental, TriggerManual); err != nil {
 		return dbgen.Integration{}, fmt.Errorf("enfileirar sync: %w", err)
 	}

@@ -131,6 +131,8 @@ type Integration struct {
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 	Label                 string
+	NotifiedStatus        string
+	NotifiedAt            pgtype.Timestamptz
 }
 
 type Job struct {
@@ -147,6 +149,18 @@ type Job struct {
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
 	LeaseToken  pgtype.UUID
+}
+
+type PushSubscription struct {
+	ID            pgtype.UUID
+	Endpoint      string
+	P256dh        string
+	Auth          string
+	UserAgent     string
+	Failures      int32
+	LastSuccessAt pgtype.Timestamptz
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
 }
 
 type Setting struct {

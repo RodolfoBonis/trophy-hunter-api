@@ -447,6 +447,7 @@ func (s *Syncer) onRunClose(ctx context.Context, integID pgtype.UUID, scope stri
 		return // conta removida (sync_runs.integration_id ON DELETE SET NULL)
 	}
 	s.AutoLink(ctx)
+	s.enqueueUnlocksNotice(ctx)
 	if gamesFailed == 0 {
 		metrics.SyncRun(scope, "ok")
 		if err := s.q.MarkIntegrationSynced(ctx, dbgen.MarkIntegrationSyncedParams{
@@ -458,6 +459,7 @@ func (s *Syncer) onRunClose(ctx context.Context, integID pgtype.UUID, scope stri
 		if integ, err := s.q.GetIntegration(ctx, integID); err == nil {
 			s.setStatus(integ.Platform, "connected")
 		}
+		s.notifyStatus(ctx, integID, "connected", "")
 		return
 	}
 	metrics.SyncRun(scope, "error")
@@ -535,6 +537,7 @@ func (s *Syncer) applyIntegrationStatusFor(ctx context.Context, integID pgtype.U
 		}
 	}
 	s.setStatus(platform, status)
+	s.notifyStatus(bgctx, integID, status, msg)
 }
 
 // remoteChanged indica se a marca d'água (remote_updated_at) difere do rtime remoto atual.

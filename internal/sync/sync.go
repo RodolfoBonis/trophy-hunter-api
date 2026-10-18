@@ -16,6 +16,8 @@
 package sync
 
 import (
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
+
 	"context"
 	"encoding/json"
 	"errors"
@@ -119,6 +121,7 @@ type Syncer struct {
 	cipher       *crypto.Cipher
 	steamFactory SteamFactory
 	psn          PSNAPI
+	notifier     *push.Service
 	logger       *slog.Logger
 }
 
@@ -130,8 +133,10 @@ type Deps struct {
 	Cipher       *crypto.Cipher
 	SteamFactory SteamFactory
 	// PSN é o cliente da PlayStation (uma instância por processo; nil desliga a PSN).
-	PSN    PSNAPI
-	Logger *slog.Logger
+	PSN PSNAPI
+	// Notifier entrega os jobs `notify` (só no worker; nil = descarta).
+	Notifier *push.Service
+	Logger   *slog.Logger
 }
 
 // New constrói o Syncer.
@@ -143,6 +148,7 @@ func New(d Deps) *Syncer {
 		cipher:       d.Cipher,
 		steamFactory: d.SteamFactory,
 		psn:          d.PSN,
+		notifier:     d.Notifier,
 		logger:       d.Logger,
 	}
 }
@@ -240,6 +246,11 @@ func (s *Syncer) HandleJob(ctx context.Context, job queue.Job) error {
 			return fmt.Errorf("payload sync_game inválido: %w", err)
 		}
 		return s.handleGame(ctx, job, p)
+	case push.JobKind:
+		if s.notifier == nil {
+			return nil
+		}
+		return s.notifier.HandleJob(ctx, job)
 	default:
 		return fmt.Errorf("kind de job desconhecido: %s", job.Kind)
 	}
