@@ -69,6 +69,36 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
 
+  /client-vitals:
+    post:
+      tags: [me]
+      operationId: reportClientVitals
+      summary: Web Vitals do navegador (aberto, sem token; sendBeacon text/plain; limite por origem). Só vira métrica.
+      security: []
+      requestBody:
+        required: true
+        content:
+          text/plain:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                device: { type: string, enum: [mobile, desktop] }
+                items:
+                  type: array
+                  maxItems: 10
+                  items:
+                    type: object
+                    required: [name, value, route]
+                    properties:
+                      name: { type: string, enum: [LCP, INP, CLS, FCP, TTFB] }
+                      value: { type: number, description: "ms (CLS sem unidade)" }
+                      route: { type: string }
+      responses:
+        "204": { description: Registrado }
+        "400": { description: Corpo inválido }
+        "429": { description: Limite por origem excedido }
+
   /me/badges:
     get:
       tags: [me]

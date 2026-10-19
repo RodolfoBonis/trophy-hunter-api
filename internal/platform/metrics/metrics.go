@@ -99,6 +99,18 @@ var (
 		Help: "Erros reportados pelo app no navegador, por tipo.",
 	}, []string{"kind"})
 
+	// Web Vitals dos usuários: tempos em segundos (LCP, INP, FCP, TTFB) e CLS (sem unidade).
+	webVitalsSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "web_vitals_seconds",
+		Help:    "Web Vitals de tempo medidos no navegador (LCP, INP, FCP, TTFB), por tela e aparelho.",
+		Buckets: []float64{0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1, 1.5, 2, 2.5, 3, 4, 6, 10},
+	}, []string{"name", "route", "device"})
+	webVitalsCLS = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "web_vitals_cls",
+		Help:    "Cumulative Layout Shift medido no navegador, por tela e aparelho.",
+		Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.15, 0.25, 0.5, 1},
+	}, []string{"route", "device"})
+
 	accountDeletions = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "account_deletions_total",
 		Help: "Contas excluídas pelo próprio usuário, pelo resultado da remoção no Keycloak (ok|error|skipped).",
@@ -111,12 +123,37 @@ func init() {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
-	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed, aiJobs, pushSent, httpRequests, httpDuration, clientErrors, accountDeletions)
+	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed, aiJobs, pushSent, httpRequests, httpDuration, clientErrors, accountDeletions, webVitalsSeconds, webVitalsCLS)
 	for _, k := range AccountDeletionResults {
 		accountDeletions.WithLabelValues(k)
 	}
 	for _, k := range ClientErrorKinds {
 		clientErrors.WithLabelValues(k)
+	}
+}
+
+// VitalRoutes são os grupos de tela aceitos nos Web Vitals (o app normaliza; o resto vira "other").
+var VitalRoutes = []string{
+	"home", "library", "game", "hunt", "next", "timeline", "friends", "friend", "challenge",
+	"recap", "badges", "settings", "public", "invite", "other",
+}
+
+// ObserveWebVital registra uma medida do navegador. Nome desconhecido ou valor absurdo é ignorado.
+func ObserveWebVital(name, route, device string, value float64) {
+	if value < 0 {
+		return
+	}
+	switch name {
+	case "LCP", "INP", "FCP", "TTFB":
+		if value > 60_000 {
+			return
+		}
+		webVitalsSeconds.WithLabelValues(name, route, device).Observe(value / 1000) // o navegador mede em ms
+	case "CLS":
+		if value > 10 {
+			return
+		}
+		webVitalsCLS.WithLabelValues(route, device).Observe(value)
 	}
 }
 
