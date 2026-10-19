@@ -32,7 +32,8 @@ func TestClientErrorsOpenRedactedAndLimited(t *testing.T) {
 	m := e.do(t, http.MethodGet, "/metrics", "", false)
 	body, _ := io.ReadAll(m.Body)
 	_ = m.Body.Close()
-	require.Contains(t, string(body), `client_errors_total{kind="render",release="0.13.2"} 1`)
+	require.Contains(t, string(body), `client_errors_total{kind="render"} 1`)
+	require.Contains(t, string(body), `client_errors_total{kind="network"} 0`, "tipos nascem em 0 (increase do 1º erro conta)")
 
 	// Limite por origem: 30/min (2 já usados acima contam só os aceitos e recusados pelo limiter).
 	got429 := false

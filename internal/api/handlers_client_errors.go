@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -26,8 +27,6 @@ const (
 	clientErrorMaxStack   = 4 << 10
 	clientErrorPerMinute  = 30
 )
-
-var clientErrorKinds = map[string]bool{"render": true, "unhandled": true, "api_contract": true, "network": true, "other": true}
 
 // Nada de token/código OIDC nos logs, mesmo que venha numa mensagem ou URL.
 var clientErrorSecrets = regexp.MustCompile(`(?i)(bearer\s+[a-z0-9._~+/=-]+|(access_token|refresh_token|id_token|code|state|session_state|npsso)=[^&\s"']+|eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)`)
@@ -99,7 +98,7 @@ func (h *Handlers) reportClientError(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, r, httperr.New(httperr.KindBadRequest, "Bad request", "informe ao menos message"))
 		return
 	}
-	if !clientErrorKinds[req.Kind] {
+	if !slices.Contains(metrics.ClientErrorKinds, req.Kind) {
 		req.Kind = "other"
 	}
 	release := clip(strings.TrimSpace(req.Release), 32)
@@ -107,7 +106,7 @@ func (h *Handlers) reportClientError(w http.ResponseWriter, r *http.Request) {
 		release = "unknown"
 	}
 	route, _, _ := strings.Cut(req.Route, "?")
-	metrics.ClientError(req.Kind, release)
+	metrics.ClientError(req.Kind)
 	h.logger.Warn("client_error",
 		slog.String("kind", req.Kind),
 		slog.String("message", clip(req.Message, clientErrorMaxMessage)),

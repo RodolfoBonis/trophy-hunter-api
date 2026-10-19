@@ -96,8 +96,8 @@ var (
 
 	clientErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "client_errors_total",
-		Help: "Erros reportados pelo app no navegador, por tipo e versão do web.",
-	}, []string{"kind", "release"})
+		Help: "Erros reportados pelo app no navegador, por tipo.",
+	}, []string{"kind"})
 )
 
 func init() {
@@ -107,11 +107,18 @@ func init() {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
 	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed, aiJobs, pushSent, httpRequests, httpDuration, clientErrors)
+	for _, k := range ClientErrorKinds {
+		clientErrors.WithLabelValues(k)
+	}
 }
 
+// ClientErrorKinds são os tipos aceitos; todos nascem em 0 para o increase() do primeiro erro contar
+// (série que já surge com valor > 0 dá increase 0 no Prometheus). A versão do web vai só no log.
+var ClientErrorKinds = []string{"render", "unhandled", "api_contract", "network", "other"}
+
 // ClientError registra um erro reportado pelo navegador (POST /client-errors).
-func ClientError(kind, release string) {
-	clientErrors.WithLabelValues(kind, release).Inc()
+func ClientError(kind string) {
+	clientErrors.WithLabelValues(kind).Inc()
 }
 
 // EnableIntegrationStatus registra e habilita o gauge integration_status. Chamado SÓ pelo worker.
