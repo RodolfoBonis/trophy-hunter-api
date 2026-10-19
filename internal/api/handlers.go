@@ -11,6 +11,7 @@ import (
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/backlog"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/badges"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/challenges"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/promql"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
 
@@ -43,6 +44,7 @@ type Handlers struct {
 	exports         *cooldown
 	badges          *badges.Service
 	backlog         *backlog.Service
+	prom            *promql.Client
 }
 
 // HandlerDeps injeta as dependências dos handlers.
@@ -68,6 +70,8 @@ type HandlerDeps struct {
 	IDP userDeleter
 	// Backlog: busca nas lojas e lista de desejos com preço. nil = desligado (501).
 	Backlog *backlog.Service
+	// Prom consulta o Prometheus para o painel do dono. nil = seção indisponível.
+	Prom *promql.Client
 }
 
 // NewHandlers constrói os handlers.
@@ -90,6 +94,7 @@ func NewHandlers(d HandlerDeps) *Handlers {
 		queue:           d.Queue,
 		idp:             d.IDP,
 		backlog:         d.Backlog,
+		prom:            d.Prom,
 		exports:         newCooldown(exportCooldown),
 		badges:          badges.New(d.Queries, d.Queue, d.Logger),
 		q:               d.Queries,

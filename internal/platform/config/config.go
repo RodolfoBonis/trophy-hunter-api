@@ -27,22 +27,24 @@ const (
 
 // Config agrega toda a configuração do serviço (API + worker).
 type Config struct {
-	Env               string `env:"APP_ENV" envDefault:"dev"`
-	HTTP              HTTP
-	Metrics           Metrics
-	DB                DB
-	Redis             Redis
-	Auth              Auth
-	Crypto            Crypto
-	Telemetry         Telemetry
-	Sync              Sync
-	Steam             Steam
-	PSN               PSN
-	AI                AI
-	Push              Push
-	HLTB              HLTB
-	Prices            Prices
-	WorkerConcurrency int `env:"WORKER_CONCURRENCY" envDefault:"4"`
+	Env       string `env:"APP_ENV" envDefault:"dev"`
+	HTTP      HTTP
+	Metrics   Metrics
+	DB        DB
+	Redis     Redis
+	Auth      Auth
+	Crypto    Crypto
+	Telemetry Telemetry
+	Sync      Sync
+	Steam     Steam
+	PSN       PSN
+	AI        AI
+	Push      Push
+	HLTB      HLTB
+	Prices    Prices
+	// PrometheusURL: HTTP API do Prometheus no cluster (painel do dono). Vazio = seção indisponível.
+	PrometheusURL     string `env:"PROMETHEUS_URL"`
+	WorkerConcurrency int    `env:"WORKER_CONCURRENCY" envDefault:"4"`
 }
 
 // HTTP configura o servidor HTTP da API.

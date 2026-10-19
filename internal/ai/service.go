@@ -102,6 +102,9 @@ type chatPayload struct {
 
 /* ── Pedidos (API) ─────────────────────────────────────────────────────────────────────── */
 
+// DailyLimit é o teto diário de pedidos de IA por membro (0 = sem teto; o dono nunca tem).
+func (s *Service) DailyLimit() int { return s.dailyLimit }
+
 // ErrDailyLimit indica que o membro atingiu o teto diário de pedidos de IA.
 var ErrDailyLimit = errors.New("limite diário de IA atingido")
 

@@ -101,8 +101,11 @@ type Queue interface {
 	// Fail registra uma falha: reagenda com backoff enquanto houver tentativas; esgotadas (ou erro
 	// Permanent), marca 'dead'. Devolve ErrLeaseLost se o lease_token não bater.
 	Fail(ctx context.Context, id, leaseToken string, cause error) error
-	// Cleanup remove jobs terminais (done/dead) mais antigos que olderThan. Devolve quantos apagou.
-	Cleanup(ctx context.Context, olderThan time.Duration) (int64, error)
+	// Cleanup remove jobs done mais antigos que doneAge e dead mais antigos que deadAge. Devolve
+	// quantos apagou.
+	Cleanup(ctx context.Context, doneAge, deadAge time.Duration) (int64, error)
+	// Retry devolve um job dead para a fila; ErrNotRetryable se não existir ou não estiver dead.
+	Retry(ctx context.Context, id string) error
 }
 
 // BackoffConfig parametriza o backoff exponencial com jitter.

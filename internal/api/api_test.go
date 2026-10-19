@@ -23,6 +23,7 @@ import (
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/auth"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/config"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/crypto"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/promql"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
 	syncpkg "github.com/RodolfoBonis/trophy-hunter-api/internal/sync"
@@ -96,6 +97,7 @@ type buildOpts struct {
 	aiDailyLimit   int
 	idp            *fakeIDP
 	stores         *fakeStores
+	promURL        string
 }
 
 func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, runner ai.Runner, opts ...func(*buildOpts)) *testEnv {
@@ -129,6 +131,9 @@ func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, ru
 	deps := api.HandlerDeps{Queries: q, Pool: pool, Syncer: syncer, Logger: logger, Push: notifier, Queue: jobs, OwnerEmail: ownerEmail, AppURL: "https://trophy.test"}
 	if o.idp != nil {
 		deps.IDP = o.idp
+	}
+	if o.promURL != "" {
+		deps.Prom = promql.New(o.promURL, nil)
 	}
 	if o.stores != nil {
 		deps.Backlog = backlog.New(q, o.stores, o.stores.ps(), o.stores.itad(), jobs, logger)

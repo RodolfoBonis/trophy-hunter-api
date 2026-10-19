@@ -26,8 +26,10 @@ const (
 	maintenanceInterval = 10 * time.Minute
 	// reapOlderThan: runs presos em running por mais que isto sem jobs vivos são interrompidos.
 	reapOlderThanMinutes = 15
-	// jobRetention: jobs terminais (done/dead) mais antigos que isto são apagados.
-	jobRetention = 7 * 24 * time.Hour
+	// jobRetention: jobs done mais antigos que isto são apagados; os dead ficam mais (deadRetention),
+	// para dar tempo de investigar/reprocessar pelo painel do dono.
+	jobRetention  = 7 * 24 * time.Hour
+	deadRetention = 30 * 24 * time.Hour
 )
 
 // Worker consome a fila: reivindica jobs, executa e marca done/fail. Roda N goroutines + uma de
@@ -171,7 +173,7 @@ func (w *Worker) reapOnce(ctx context.Context) {
 }
 
 func (w *Worker) cleanupOnce(ctx context.Context) {
-	n, err := w.queue.Cleanup(ctx, jobRetention)
+	n, err := w.queue.Cleanup(ctx, jobRetention, deadRetention)
 	if err != nil {
 		w.logger.Warn("limpeza de jobs antigos falhou", slog.String("err", err.Error()))
 		return

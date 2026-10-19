@@ -191,16 +191,44 @@ WHERE id = $1 AND status = 'running' AND lease_token = $2`
 	return nil
 }
 
-// Cleanup apaga jobs terminais (done/dead) mais antigos que olderThan (housekeeping periódico).
-func (q *PostgresQueue) Cleanup(ctx context.Context, olderThan time.Duration) (int64, error) {
-	tag, err := q.pool.Exec(ctx,
-		`DELETE FROM jobs
-         WHERE status IN ('done','dead') AND updated_at < now() - make_interval(secs => $1::float8)`,
-		olderThan.Seconds())
-	if err != nil {
-		return 0, fmt.Errorf("cleanup jobs: %w", err)
+// Cleanup apaga jobs terminais antigos (housekeeping periódico): done depois de doneAge, dead depois
+// de deadAge (dead fica mais tempo — é o que se investiga). Em lotes, para não travar a tabela.
+func (q *PostgresQueue) Cleanup(ctx context.Context, doneAge, deadAge time.Duration) (int64, error) {
+	var total int64
+	for {
+		tag, err := q.pool.Exec(ctx,
+			`DELETE FROM jobs WHERE id IN (
+                SELECT id FROM jobs
+                WHERE (status = 'done' AND updated_at < now() - make_interval(secs => $1::float8))
+                   OR (status = 'dead' AND updated_at < now() - make_interval(secs => $2::float8))
+                LIMIT 500)`,
+			doneAge.Seconds(), deadAge.Seconds())
+		if err != nil {
+			return total, fmt.Errorf("cleanup jobs: %w", err)
+		}
+		total += tag.RowsAffected()
+		if tag.RowsAffected() < 500 {
+			return total, nil
+		}
 	}
-	return tag.RowsAffected(), nil
+}
+
+// ErrNotRetryable indica que o job não existe ou não está dead.
+var ErrNotRetryable = errors.New("queue: job não está dead")
+
+// Retry devolve um job dead para a fila (tentativas zeradas). Usado pelo painel do dono.
+func (q *PostgresQueue) Retry(ctx context.Context, id string) error {
+	tag, err := q.pool.Exec(ctx,
+		`UPDATE jobs SET status = 'queued', attempts = 0, run_at = now(), locked_until = NULL,
+                last_error = '(reprocessado) ' || coalesce(last_error, ''), updated_at = now()
+         WHERE id = $1 AND status = 'dead'`, id)
+	if err != nil {
+		return fmt.Errorf("retry job: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotRetryable
+	}
+	return nil
 }
 
 type rowScanner interface {

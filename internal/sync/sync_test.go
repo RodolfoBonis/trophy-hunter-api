@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -441,4 +442,38 @@ func TestBorrowedGameFromRecentlyPlayed(t *testing.T) {
 	require.NoError(t, err)
 	processAll(t, jobs, syncer)
 	require.Equal(t, "ok", latestRun(t, q).Status)
+}
+
+// TestPrivateProfileMidSyncDoesNotFloodDeadJobs: o perfil fica privado no meio de um sync com vários
+// jogos — o primeiro jogo marca error_private e os outros param sem bater na Steam (1 job morto, não
+// um por jogo; antes uma conta com 225 jogos gerava 225 dead).
+func TestPrivateProfileMidSyncDoesNotFloodDeadJobs(t *testing.T) {
+	pool := testsupport.NewPostgres(t)
+	ctx := context.Background()
+	q := dbgen.New(pool)
+	jobs := queue.NewPostgres(pool, queue.DefaultBackoff)
+
+	fake := newFake()
+	for i := 0; i < 6; i++ {
+		id := 700 + i
+		fake.owned = append(fake.owned, steam.OwnedGame{AppID: id, Name: fmt.Sprintf("Jogo %d", i), PlaytimeForever: 5, RtimeLastPlayed: 1700000000 + int64(i), HasCommunityVisibleStats: true})
+		fake.schema[id] = []steam.SchemaAchievement{{Name: "A", DisplayName: "A", Description: desc("x")}}
+		fake.achErr[id] = steam.ErrProfilePrivate
+	}
+	fake.achErr[620] = steam.ErrProfilePrivate
+
+	syncer := newSyncer(t, pool, q, jobs, fake)
+	integ0, err := syncer.ConnectSteam(ctx, syncpkg.ConnectSteamParams{UserID: ownerID, APIKey: "FAKEKEY", IDOrVanity: "76561197960000000"})
+	require.NoError(t, err)
+	processAll(t, jobs, syncer)
+
+	integ, err := q.GetIntegration(ctx, integ0.ID)
+	require.NoError(t, err)
+	require.Equal(t, "error_private", integ.Status)
+	var dead int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM jobs WHERE status = 'dead' AND kind = 'sync_game'").Scan(&dead))
+	require.LessOrEqual(t, dead, 1, "só o jogo que descobriu o perfil privado morre")
+	run := latestRun(t, q)
+	require.Equal(t, int32(7), run.GamesDone, "todos os filhos fecham o run")
+	require.Equal(t, "error", run.Status)
 }

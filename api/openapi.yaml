@@ -1386,6 +1386,42 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /admin/health:
+    get:
+      tags: [admin]
+      operationId: getAdminHealth
+      summary: Painel do dono — contas, syncs 24 h, fila (com dead recentes), uso de IA e, do Prometheus, alertas, erros do front, fontes externas e Web Vitals.
+      responses:
+        "200":
+          description: OK (prometheus.available=false quando o Prometheus não responde)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /admin/jobs/{id}/retry:
+    post:
+      tags: [admin]
+      operationId: retryJob
+      summary: Devolve um job dead para a fila (tentativas zeradas).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "202": { description: Reenfileirado }
+        "409": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /admin/integrations/{id}/sync:
+    post:
+      tags: [admin]
+      operationId: adminSyncIntegration
+      summary: Sincroniza a conta de qualquer membro.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "202": { description: Enfileirado }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /admin/members/{id}:
     delete:
       tags: [admin]

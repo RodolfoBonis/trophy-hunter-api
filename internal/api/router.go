@@ -92,6 +92,10 @@ func NewRouter(d RouterDeps) http.Handler {
 				r.Delete("/invites/{id}", h.revokeInvite)
 				r.Get("/members", h.listMembers)
 				r.Delete("/members/{id}", h.removeMember)
+				// Painel do dono (saúde).
+				r.Get("/health", h.getAdminHealth)
+				r.Post("/jobs/{id}/retry", h.retryJob)
+				r.Post("/integrations/{id}/sync", h.adminSyncIntegration)
 			})
 
 			// Social (opt-in e recíproco — ver handlers_social.go).

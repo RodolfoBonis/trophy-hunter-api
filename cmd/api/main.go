@@ -26,6 +26,7 @@ import (
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/crypto"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/db"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/httpserver"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/promql"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
 	redisplat "github.com/RodolfoBonis/trophy-hunter-api/internal/platform/redis"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/telemetry"
@@ -121,6 +122,7 @@ func run() error {
 		AuthReady: authenticator.Ready,
 		IDP:       idp,
 		Backlog:   backlogSvc,
+		Prom:      promql.New(cfg.PrometheusURL, nil),
 	})
 	router := api.NewRouter(api.RouterDeps{
 		Handlers: handlers, Auth: authenticator, Logger: logger,

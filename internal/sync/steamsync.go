@@ -181,13 +181,19 @@ func (s *Syncer) handleGame(ctx context.Context, job queue.Job, p GamePayload) e
 		return s.handlePSNGame(ctx, job, p, runID, game)
 	}
 
-	_, client, creds, err := s.loadSteam(ctx, integID)
+	integ, client, creds, err := s.loadSteam(ctx, integID)
 	if errors.Is(err, ErrNotConnected) {
 		s.finalizeChild(ctx, runID, true, 0)
 		return nil
 	}
 	if err != nil {
 		return s.gameTransient(ctx, job, runID, integID, err)
+	}
+	if integ.Status == "error_private" {
+		// Outro jogo deste sync já viu que o perfil ficou privado: não adianta bater na Steam jogo a
+		// jogo (viravam centenas de jobs mortos). Conta como falha do run e segue.
+		s.finalizeChild(ctx, runID, true, 0)
+		return nil
 	}
 
 	appID := p.AppID

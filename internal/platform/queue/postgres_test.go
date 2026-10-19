@@ -215,13 +215,50 @@ func TestCleanupRemovesOldTerminalJobs(t *testing.T) {
 	_, err = pool.Exec(ctx, `UPDATE jobs SET updated_at = now() - interval '8 days' WHERE id=$1`, c1.ID)
 	require.NoError(t, err)
 
-	n, err := q.Cleanup(ctx, 7*24*time.Hour)
+	// Um dead da mesma idade fica (retenção maior); um dead bem velho sai.
+	_, _, err = q.Enqueue(ctx, queue.EnqueueParams{Kind: "sync_game"})
+	require.NoError(t, err)
+	d1, err := q.Claim(ctx, time.Minute)
+	require.NoError(t, err)
+	require.NoError(t, q.Fail(ctx, d1.ID, d1.LeaseToken, queue.Permanent(errors.New("x"))))
+	_, err = pool.Exec(ctx, `UPDATE jobs SET updated_at = now() - interval '8 days' WHERE id=$1`, d1.ID)
+	require.NoError(t, err)
+
+	n, err := q.Cleanup(ctx, 7*24*time.Hour, 30*24*time.Hour)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), n)
 
 	var count int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE id=$1`, c1.ID).Scan(&count))
 	require.Equal(t, 0, count)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE id=$1`, d1.ID).Scan(&count))
+	require.Equal(t, 1, count, "dead de 8 dias ainda fica")
+
+	_, err = pool.Exec(ctx, `UPDATE jobs SET updated_at = now() - interval '31 days' WHERE id=$1`, d1.ID)
+	require.NoError(t, err)
+	n, err = q.Cleanup(ctx, 7*24*time.Hour, 30*24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+}
+
+func TestRetryDeadJob(t *testing.T) {
+	pool := testsupport.NewPostgres(t)
+	q := queue.NewPostgres(pool, queue.DefaultBackoff)
+	ctx := context.Background()
+
+	_, _, err := q.Enqueue(ctx, queue.EnqueueParams{Kind: "sync_game"})
+	require.NoError(t, err)
+	j, err := q.Claim(ctx, time.Minute)
+	require.NoError(t, err)
+	require.ErrorIs(t, q.Retry(ctx, j.ID), queue.ErrNotRetryable, "running não reprocessa")
+	require.NoError(t, q.Fail(ctx, j.ID, j.LeaseToken, queue.Permanent(errors.New("perfil privado"))))
+	require.NoError(t, q.Retry(ctx, j.ID))
+	again, err := q.Claim(ctx, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, again)
+	require.Equal(t, j.ID, again.ID)
+	require.Equal(t, 1, again.Attempts, "tentativas zeradas antes do novo claim")
+	require.ErrorIs(t, q.Retry(ctx, "00000000-0000-0000-0000-000000000000"), queue.ErrNotRetryable)
 }
 
 func TestClaimFiltersByKind(t *testing.T) {
