@@ -63,6 +63,14 @@ func NewRouter(d RouterDeps) http.Handler {
 	r.With(middleware.Timeout(5*time.Second)).Post("/api/v1/client-errors", h.reportClientError)
 	r.With(middleware.Timeout(5*time.Second)).Post("/api/v1/client-vitals", h.reportClientVitals)
 
+	// Perfil público (sem login; limite por IP). Só existe se a pessoa ligou.
+	r.Route("/api/v1/public/profiles/{slug}", func(r chi.Router) {
+		r.Use(middleware.Timeout(10 * time.Second))
+		r.Get("/", h.getPublicProfile)
+		r.Get("/card.png", h.getPublicCard)
+		r.Get("/share", h.sharePage)
+	})
+
 	// API autenticada.
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(d.Auth.Middleware)
@@ -103,6 +111,7 @@ func NewRouter(d RouterDeps) http.Handler {
 			// Seus dados (LGPD).
 			r.Get("/me/export", h.exportMe)
 			r.Get("/me/badges", h.getMyBadges)
+			r.Put("/me/public-profile", h.putPublicProfile)
 			r.Delete("/me", h.deleteMe)
 			r.Get("/games/{id}/friends", h.getGameFriends)
 			r.Get("/games/{id}/compare/{friendId}", h.compareGame)

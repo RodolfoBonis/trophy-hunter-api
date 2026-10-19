@@ -28,4 +28,5 @@ SELECT
     (SELECT count(*) FROM users WHERE status = 'active')::int AS members,
     (SELECT count(*) FROM user_badges)::int AS badges,
     (SELECT count(*) FROM challenges WHERE status = 'open')::int AS open_challenges,
-    (SELECT count(*) FROM wishlist)::int AS wishlist_items;
+    (SELECT count(*) FROM wishlist)::int AS wishlist_items,
+    (SELECT count(*) FROM users WHERE public_enabled)::int AS public_profiles;

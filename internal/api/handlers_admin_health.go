@@ -168,7 +168,7 @@ func (h *Handlers) getAdminHealth(w http.ResponseWriter, r *http.Request) {
 		writeInternal(w, r, err)
 		return
 	}
-	out.Totals = map[string]int{"members": int(t.Members), "badges": int(t.Badges), "open_challenges": int(t.OpenChallenges), "wishlist_items": int(t.WishlistItems)}
+	out.Totals = map[string]int{"members": int(t.Members), "badges": int(t.Badges), "open_challenges": int(t.OpenChallenges), "wishlist_items": int(t.WishlistItems), "public_profiles": int(t.PublicProfiles)}
 
 	wg.Wait()
 	writeJSON(w, http.StatusOK, out)

@@ -99,6 +99,72 @@ paths:
         "400": { description: Corpo inválido }
         "429": { description: Limite por origem excedido }
 
+  /me/public-profile:
+    put:
+      tags: [me]
+      operationId: putPublicProfile
+      summary: Liga/desliga o perfil público (opt-in) e escolhe o link (/u/<slug>) e o apelido.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+                slug: { type: string, pattern: "^[a-z0-9](?:[a-z0-9-]{1,28}[a-z0-9])$" }
+                name: { type: string, maxLength: 40 }
+      responses:
+        "200":
+          description: Usuário atualizado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /public/profiles/{slug}:
+    get:
+      tags: [public]
+      operationId: getPublicProfile
+      summary: Vitrine pública (sem login; limite por IP). 404 se não existe ou está desligada.
+      security: []
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicProfile" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /public/profiles/{slug}/card.png:
+    get:
+      tags: [public]
+      operationId: getPublicCard
+      summary: Cartão 1200×630 (og:image), com ETag.
+      security: []
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: PNG, content: { image/png: {} } }
+        "304": { description: Não mudou }
+        "404": { description: Não encontrado }
+
+  /public/profiles/{slug}/share:
+    get:
+      tags: [public]
+      operationId: getPublicSharePage
+      summary: HTML com og:* para pré-visualização (WhatsApp/Discord); redireciona para a página do app.
+      security: []
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: HTML, content: { text/html: {} } }
+        "404": { description: Não encontrado }
+
   /me/badges:
     get:
       tags: [me]
@@ -1461,6 +1527,50 @@ components:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
   schemas:
+    PublicProfile:
+      type: object
+      required: [slug, name, platinums, trophies, rare, completed, badges, rarest, completions]
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        platinums: { type: integer }
+        trophies: { type: integer }
+        rare: { type: integer }
+        completed: { type: integer }
+        badges:
+          type: array
+          items:
+            type: object
+            required: [key, name, tier]
+            properties:
+              key: { type: string }
+              name: { type: string }
+              tier: { type: string }
+              season: { type: string }
+        rarest:
+          type: array
+          items:
+            type: object
+            required: [name, type, icon, rarity_pct, game_title, platform]
+            properties:
+              name: { type: string }
+              type: { type: string }
+              icon: { type: string }
+              rarity_pct: { type: number }
+              game_title: { type: string }
+              platform: { type: string }
+        completions:
+          type: array
+          items:
+            type: object
+            required: [title, platform, external_id, cover, hero, completed_at]
+            properties:
+              title: { type: string }
+              platform: { type: string }
+              external_id: { type: string }
+              cover: { type: string }
+              hero: { type: string }
+              completed_at: { type: [string, "null"], format: date-time }
     WishlistItem:
       type: object
       required: [id, platform, store_id, title, cover, target_price_cents, price_status, price_cents, regular_cents, cut, low_cents, shop, url, completionist_h, main_h]
@@ -1764,6 +1874,9 @@ components:
         share_progress:
           type: boolean
           description: Compartilha o progresso com os outros membros (e vê o deles). Opt-in, começa false.
+        public_enabled: { type: boolean, description: Perfil público ligado (opt-in). }
+        public_slug: { type: string, description: "Link /u/<slug> (vazio se nunca escolhido)." }
+        public_name: { type: string, description: Apelido mostrado no perfil público. }
     Recap:
       type: object
       description: Retrospectiva do período (calculada na hora; fuso de Brasília; jogos pela conta mais avançada).

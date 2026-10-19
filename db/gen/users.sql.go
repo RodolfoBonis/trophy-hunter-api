@@ -14,7 +14,7 @@ import (
 const activateUser = `-- name: ActivateUser :one
 UPDATE users SET status = 'active', invited_by = $2, updated_at = now()
 WHERE id = $1 AND status IN ('pending', 'removed')
-RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at
+RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at, public_enabled, public_slug, public_name
 `
 
 type ActivateUserParams struct {
@@ -40,6 +40,9 @@ func (q *Queries) ActivateUser(ctx context.Context, arg ActivateUserParams) (Use
 		&i.UpdatedAt,
 		&i.ShareProgress,
 		&i.ShareProgressAt,
+		&i.PublicEnabled,
+		&i.PublicSlug,
+		&i.PublicName,
 	)
 	return i, err
 }
@@ -47,7 +50,7 @@ func (q *Queries) ActivateUser(ctx context.Context, arg ActivateUserParams) (Use
 const claimOwner = `-- name: ClaimOwner :one
 UPDATE users SET issuer = $2, subject = $3, email = $4, name = $5, last_seen_at = now(), updated_at = now()
 WHERE id = $1 AND role = 'owner'
-RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at
+RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at, public_enabled, public_slug, public_name
 `
 
 type ClaimOwnerParams struct {
@@ -83,6 +86,9 @@ func (q *Queries) ClaimOwner(ctx context.Context, arg ClaimOwnerParams) (User, e
 		&i.UpdatedAt,
 		&i.ShareProgress,
 		&i.ShareProgressAt,
+		&i.PublicEnabled,
+		&i.PublicSlug,
+		&i.PublicName,
 	)
 	return i, err
 }
@@ -136,7 +142,7 @@ func (q *Queries) CreateInvite(ctx context.Context, arg CreateInviteParams) (Inv
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (issuer, subject, email, name) VALUES ($1, $2, $3, $4)
 ON CONFLICT (issuer, subject) WHERE subject IS NOT NULL DO UPDATE SET updated_at = now()
-RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at
+RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at, public_enabled, public_slug, public_name
 `
 
 type CreateUserParams struct {
@@ -169,6 +175,9 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.UpdatedAt,
 		&i.ShareProgress,
 		&i.ShareProgressAt,
+		&i.PublicEnabled,
+		&i.PublicSlug,
+		&i.PublicName,
 	)
 	return i, err
 }
@@ -187,7 +196,7 @@ func (q *Queries) DeleteMember(ctx context.Context, id pgtype.UUID) (int64, erro
 }
 
 const getOwner = `-- name: GetOwner :one
-SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at FROM users WHERE role = 'owner'
+SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at, public_enabled, public_slug, public_name FROM users WHERE role = 'owner'
 `
 
 func (q *Queries) GetOwner(ctx context.Context) (User, error) {
@@ -207,12 +216,44 @@ func (q *Queries) GetOwner(ctx context.Context) (User, error) {
 		&i.UpdatedAt,
 		&i.ShareProgress,
 		&i.ShareProgressAt,
+		&i.PublicEnabled,
+		&i.PublicSlug,
+		&i.PublicName,
+	)
+	return i, err
+}
+
+const getPublicUser = `-- name: GetPublicUser :one
+SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at, public_enabled, public_slug, public_name FROM users WHERE public_slug = $1 AND public_enabled AND status = 'active'
+`
+
+// Só quem ligou o perfil público e está ativo; qualquer outro caso = não existe (404).
+func (q *Queries) GetPublicUser(ctx context.Context, publicSlug *string) (User, error) {
+	row := q.db.QueryRow(ctx, getPublicUser, publicSlug)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Issuer,
+		&i.Subject,
+		&i.Email,
+		&i.Name,
+		&i.Role,
+		&i.Status,
+		&i.InvitedBy,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ShareProgress,
+		&i.ShareProgressAt,
+		&i.PublicEnabled,
+		&i.PublicSlug,
+		&i.PublicName,
 	)
 	return i, err
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at FROM users WHERE id = $1
+SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at, public_enabled, public_slug, public_name FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUser(ctx context.Context, id pgtype.UUID) (User, error) {
@@ -232,13 +273,16 @@ func (q *Queries) GetUser(ctx context.Context, id pgtype.UUID) (User, error) {
 		&i.UpdatedAt,
 		&i.ShareProgress,
 		&i.ShareProgressAt,
+		&i.PublicEnabled,
+		&i.PublicSlug,
+		&i.PublicName,
 	)
 	return i, err
 }
 
 const getUserByIdentity = `-- name: GetUserByIdentity :one
 
-SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at FROM users WHERE issuer = $1 AND subject = $2
+SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at, public_enabled, public_slug, public_name FROM users WHERE issuer = $1 AND subject = $2
 `
 
 type GetUserByIdentityParams struct {
@@ -264,6 +308,9 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.UpdatedAt,
 		&i.ShareProgress,
 		&i.ShareProgressAt,
+		&i.PublicEnabled,
+		&i.PublicSlug,
+		&i.PublicName,
 	)
 	return i, err
 }
@@ -305,7 +352,7 @@ func (q *Queries) ListInvites(ctx context.Context) ([]Invite, error) {
 }
 
 const listMembers = `-- name: ListMembers :many
-SELECT u.id, u.issuer, u.subject, u.email, u.name, u.role, u.status, u.invited_by, u.last_seen_at, u.created_at, u.updated_at, u.share_progress, u.share_progress_at, (SELECT count(*) FROM integrations i WHERE i.user_id = u.id)::int AS accounts
+SELECT u.id, u.issuer, u.subject, u.email, u.name, u.role, u.status, u.invited_by, u.last_seen_at, u.created_at, u.updated_at, u.share_progress, u.share_progress_at, u.public_enabled, u.public_slug, u.public_name, (SELECT count(*) FROM integrations i WHERE i.user_id = u.id)::int AS accounts
 FROM users u
 WHERE u.status <> 'pending'
 ORDER BY (u.role = 'owner') DESC, u.created_at
@@ -325,6 +372,9 @@ type ListMembersRow struct {
 	UpdatedAt       pgtype.Timestamptz
 	ShareProgress   bool
 	ShareProgressAt pgtype.Timestamptz
+	PublicEnabled   bool
+	PublicSlug      *string
+	PublicName      string
 	Accounts        int32
 }
 
@@ -352,6 +402,9 @@ func (q *Queries) ListMembers(ctx context.Context) ([]ListMembersRow, error) {
 			&i.UpdatedAt,
 			&i.ShareProgress,
 			&i.ShareProgressAt,
+			&i.PublicEnabled,
+			&i.PublicSlug,
+			&i.PublicName,
 			&i.Accounts,
 		); err != nil {
 			return nil, err
@@ -387,6 +440,48 @@ func (q *Queries) RevokeInvite(ctx context.Context, id pgtype.UUID) (int64, erro
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setPublicProfile = `-- name: SetPublicProfile :one
+UPDATE users SET public_enabled = $1, public_slug = $2, public_name = $3, updated_at = now()
+WHERE id = $4
+RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at, public_enabled, public_slug, public_name
+`
+
+type SetPublicProfileParams struct {
+	Enabled    bool
+	Slug       *string
+	PublicName string
+	ID         pgtype.UUID
+}
+
+func (q *Queries) SetPublicProfile(ctx context.Context, arg SetPublicProfileParams) (User, error) {
+	row := q.db.QueryRow(ctx, setPublicProfile,
+		arg.Enabled,
+		arg.Slug,
+		arg.PublicName,
+		arg.ID,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Issuer,
+		&i.Subject,
+		&i.Email,
+		&i.Name,
+		&i.Role,
+		&i.Status,
+		&i.InvitedBy,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ShareProgress,
+		&i.ShareProgressAt,
+		&i.PublicEnabled,
+		&i.PublicSlug,
+		&i.PublicName,
+	)
+	return i, err
 }
 
 const touchUser = `-- name: TouchUser :exec

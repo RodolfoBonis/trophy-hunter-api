@@ -63,3 +63,12 @@ UPDATE invites SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL;
 UPDATE invites SET used_count = used_count + 1
 WHERE code_hash = $1 AND revoked_at IS NULL AND expires_at > now() AND used_count < max_uses
 RETURNING created_by;
+
+-- name: SetPublicProfile :one
+UPDATE users SET public_enabled = sqlc.arg(enabled), public_slug = sqlc.narg(slug), public_name = sqlc.arg(public_name), updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: GetPublicUser :one
+-- Só quem ligou o perfil público e está ativo; qualquer outro caso = não existe (404).
+SELECT * FROM users WHERE public_slug = $1 AND public_enabled AND status = 'active';

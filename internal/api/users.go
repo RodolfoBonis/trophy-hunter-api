@@ -142,6 +142,10 @@ type meDTO struct {
 	Status  string `json:"status"`
 	// ShareProgress: a pessoa mostra o progresso aos outros membros (e vê o deles) — opt-in.
 	ShareProgress bool `json:"share_progress"`
+	// Perfil público (opt-in): link /u/<public_slug>.
+	PublicEnabled bool   `json:"public_enabled"`
+	PublicSlug    string `json:"public_slug"`
+	PublicName    string `json:"public_name"`
 }
 
 /* ── Convites ──────────────────────────────────────────────────────────────────────────── */
@@ -257,7 +261,14 @@ func toMeDTO(u dbgen.User) meDTO {
 	if u.Subject != nil {
 		sub = *u.Subject
 	}
-	return meDTO{ID: uuidStr(u.ID), Subject: sub, Email: u.Email, Name: u.Name, Role: u.Role, Status: u.Status, ShareProgress: u.ShareProgress}
+	slug := ""
+	if u.PublicSlug != nil {
+		slug = *u.PublicSlug
+	}
+	return meDTO{
+		ID: uuidStr(u.ID), Subject: sub, Email: u.Email, Name: u.Name, Role: u.Role, Status: u.Status, ShareProgress: u.ShareProgress,
+		PublicEnabled: u.PublicEnabled, PublicSlug: slug, PublicName: u.PublicName,
+	}
 }
 
 /* ── Membros ───────────────────────────────────────────────────────────────────────────── */

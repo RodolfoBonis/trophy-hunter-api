@@ -358,6 +358,9 @@ type User struct {
 	UpdatedAt       pgtype.Timestamptz
 	ShareProgress   bool
 	ShareProgressAt pgtype.Timestamptz
+	PublicEnabled   bool
+	PublicSlug      *string
+	PublicName      string
 }
 
 type UserBadge struct {

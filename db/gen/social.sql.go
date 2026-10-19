@@ -82,7 +82,7 @@ func (q *Queries) GameFriends(ctx context.Context, arg GameFriendsParams) ([]Gam
 }
 
 const getSharer = `-- name: GetSharer :one
-SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at FROM users WHERE id = $1 AND status = 'active' AND share_progress
+SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at, public_enabled, public_slug, public_name FROM users WHERE id = $1 AND status = 'active' AND share_progress
 `
 
 // Um membro visível para os amigos (ativo e compartilhando).
@@ -103,6 +103,9 @@ func (q *Queries) GetSharer(ctx context.Context, id pgtype.UUID) (User, error) {
 		&i.UpdatedAt,
 		&i.ShareProgress,
 		&i.ShareProgressAt,
+		&i.PublicEnabled,
+		&i.PublicSlug,
+		&i.PublicName,
 	)
 	return i, err
 }
@@ -180,7 +183,7 @@ UPDATE users SET share_progress = $1::boolean,
                  share_progress_at = CASE WHEN $1::boolean THEN now() ELSE NULL END,
                  updated_at = now()
 WHERE id = $2::uuid
-RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at
+RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at, public_enabled, public_slug, public_name
 `
 
 type SetShareProgressParams struct {
@@ -207,6 +210,9 @@ func (q *Queries) SetShareProgress(ctx context.Context, arg SetShareProgressPara
 		&i.UpdatedAt,
 		&i.ShareProgress,
 		&i.ShareProgressAt,
+		&i.PublicEnabled,
+		&i.PublicSlug,
+		&i.PublicName,
 	)
 	return i, err
 }
