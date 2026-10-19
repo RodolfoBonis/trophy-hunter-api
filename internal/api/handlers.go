@@ -32,6 +32,7 @@ type Handlers struct {
 	logger          *slog.Logger
 	almostThreshold float64
 	authReady       func() bool
+	clientErrors    *clientErrorLimiter
 }
 
 // HandlerDeps injeta as dependências dos handlers.
@@ -68,6 +69,7 @@ func NewHandlers(d HandlerDeps) *Handlers {
 		appURL = "https://trophy.rodolfodebonis.com.br"
 	}
 	return &Handlers{
+		clientErrors:    newClientErrorLimiter(clientErrorPerMinute),
 		q:               d.Queries,
 		pool:            d.Pool,
 		syncer:          d.Syncer,

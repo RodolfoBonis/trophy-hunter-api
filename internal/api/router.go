@@ -59,6 +59,9 @@ func NewRouter(d RouterDeps) http.Handler {
 	r.Get("/readyz", h.ready)
 	r.Handle("/metrics", metrics.Handler())
 
+	// Erros do navegador: ABERTO (falha de login também precisa chegar), com limite por origem.
+	r.With(middleware.Timeout(5*time.Second)).Post("/api/v1/client-errors", h.reportClientError)
+
 	// API autenticada.
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(d.Auth.Middleware)

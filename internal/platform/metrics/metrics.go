@@ -93,6 +93,11 @@ var (
 
 	integrationStatusOnce    sync.Once
 	integrationStatusEnabled bool
+
+	clientErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "client_errors_total",
+		Help: "Erros reportados pelo app no navegador, por tipo e versão do web.",
+	}, []string{"kind", "release"})
 )
 
 func init() {
@@ -101,7 +106,12 @@ func init() {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
-	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed, aiJobs, pushSent, httpRequests, httpDuration)
+	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed, aiJobs, pushSent, httpRequests, httpDuration, clientErrors)
+}
+
+// ClientError registra um erro reportado pelo navegador (POST /client-errors).
+func ClientError(kind, release string) {
+	clientErrors.WithLabelValues(kind, release).Inc()
 }
 
 // EnableIntegrationStatus registra e habilita o gauge integration_status. Chamado SÓ pelo worker.

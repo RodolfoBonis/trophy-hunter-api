@@ -51,6 +51,31 @@ paths:
               schema: { $ref: "#/components/schemas/User" }
         "401": { $ref: "#/components/responses/Problem" }
 
+  /client-errors:
+    post:
+      tags: [me]
+      operationId: reportClientError
+      summary: Erro do app no navegador (aberto, sem token; limite por origem). Vira log e métrica.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                kind: { type: string, enum: [render, unhandled, api_contract, network, other] }
+                message: { type: string, maxLength: 500 }
+                stack: { type: string }
+                route: { type: string, description: "Path da tela (sem query)." }
+                release: { type: string, description: "Versão do web." }
+                user_agent: { type: string }
+      responses:
+        "204": { description: Registrado }
+        "400": { $ref: "#/components/responses/Problem" }
+        "429": { description: Limite por origem excedido }
+
   /me/sharing:
     put:
       tags: [social]
