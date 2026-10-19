@@ -31,6 +31,9 @@ SELECT jsonb_build_object(
         'scope', g.scope, 'platform', g.platform, 'game_external_id', g.game_external_id,
         'trophy_external_id', g.trophy_external_id, 'content', e.content, 'updated_at', e.updated_at
     ) ORDER BY e.updated_at), '[]') FROM ai_guide_edits e JOIN ai_guides g ON g.id = e.guide_id WHERE e.user_id = $1),
+    'hunt_progress', (SELECT coalesce(jsonb_agg(jsonb_build_object(
+        'platform', h.game_platform, 'game_external_id', h.game_external_id, 'stage', h.stage_idx, 'done_at', h.done_at
+    ) ORDER BY h.done_at), '[]') FROM hunt_progress h WHERE h.user_id = $1),
     'weekly_recaps', (SELECT coalesce(jsonb_agg(jsonb_build_object('week', r.week, 'content', r.content) ORDER BY r.week), '[]')
         FROM ai_recaps r WHERE r.user_id = $1 AND r.status = 'ready')
 )::jsonb AS data

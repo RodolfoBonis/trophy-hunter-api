@@ -158,6 +158,9 @@ func NewRouter(d RouterDeps) http.Handler {
 			r.Get("/trophies/{id}/guide", h.getTrophyGuide)
 			r.Post("/trophies/{id}/guide", h.generateTrophyGuide)
 			r.Get("/games/{id}/roadmap", h.getRoadmap)
+			// Modo caçada (checklist do roadmap ligado aos troféus reais).
+			r.Get("/games/{id}/hunt", h.getHunt)
+			r.Put("/games/{id}/hunt/stages/{idx}", h.putHuntStage)
 			r.Post("/games/{id}/roadmap", h.generateRoadmap)
 			r.Patch("/ai/guides/{id}", h.editGuide)
 			r.Get("/games/{id}/chat", h.getChat)

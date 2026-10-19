@@ -818,6 +818,43 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
+  /games/{id}/hunt:
+    get:
+      tags: [ai]
+      operationId: getHunt
+      summary: Modo caçada — etapas do roadmap ligadas aos troféus reais, marcas da pessoa e se há sync rodando.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Hunt" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /games/{id}/hunt/stages/{idx}:
+    put:
+      tags: [ai]
+      operationId: putHuntStage
+      summary: Marca/desmarca uma etapa do modo caçada como feita.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: idx, in: path, required: true, schema: { type: integer, minimum: 0, maximum: 99 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [done]
+              properties:
+                done: { type: boolean }
+      responses:
+        "204": { description: OK }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /games/{id}/roadmap:
     get:
       tags: [ai]
@@ -1229,6 +1266,28 @@ components:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
   schemas:
+    Hunt:
+      type: object
+      required: [roadmap, syncing, missables_overview, stages]
+      properties:
+        roadmap: { type: string, enum: [none, pending, running, ready, error] }
+        syncing: { type: boolean }
+        missables_overview: { type: array, items: { type: string } }
+        stages:
+          type: array
+          items:
+            type: object
+            required: [index, title, description, missables, trophy_ids, unmatched, earned, done, complete]
+            properties:
+              index: { type: integer }
+              title: { type: string }
+              description: { type: string }
+              missables: { type: array, items: { type: string } }
+              trophy_ids: { type: array, items: { type: string, format: uuid } }
+              unmatched: { type: array, items: { type: string } }
+              earned: { type: integer }
+              done: { type: boolean }
+              complete: { type: boolean }
     AccountExport:
       type: object
       required: [format, exported_at, profile, accounts, games, trophies, ai, chats, challenges]

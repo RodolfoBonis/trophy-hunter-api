@@ -181,6 +181,14 @@ type GameProgress struct {
 	CompletionPct   float64
 }
 
+type HuntProgress struct {
+	UserID         pgtype.UUID
+	GamePlatform   string
+	GameExternalID string
+	StageIdx       int32
+	DoneAt         pgtype.Timestamptz
+}
+
 type Integration struct {
 	ID                    pgtype.UUID
 	Platform              string
