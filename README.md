@@ -169,6 +169,12 @@ Entre membros: perfil do amigo (`/social/friends/{id}` + biblioteca só leitura)
 (`/games/{id}/friends`, Steam × PSN pelo título normalizado), feed de momentos (platinas, jogos
 fechados, troféus < 5%) e ranking por mês/ano/sempre. **Opt-in e recíproco**: cada pessoa liga
 `PUT /me/sharing`; quem não compartilha é invisível (404) e não vê os outros (403 `sharing_disabled`).
+
+**Desafios** (`/social/challenges`, pacote `internal/challenges`): `first_to_complete` (quem fecha o
+jogo primeiro — conclusão anterior ao início não vale), `most_trophies` / `most_rare` (janela de 7/14/30
+dias; empate no topo = sem vencedor). O worker reavalia ao fim de cada sync e a cada 5 min; push
+(`challenges` nas preferências) no convite, nos marcos 50/75/90 % e no resultado. **Comparar**:
+`GET /games/{id}/compare/{friendId}` (mesma plataforma pelo id do troféu; Steam × PSN pelo nome).
 ## Avisos e notificações
 
 - **Avisos no app:** o sync grava `unlock_events` para troféus obtidos DEPOIS do sync inicial; o web

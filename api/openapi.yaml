@@ -200,6 +200,87 @@ paths:
               schema: { $ref: "#/components/schemas/GameFriends" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /social/challenges:
+    get:
+      tags: [social]
+      operationId: listChallenges
+      summary: Desafios de que você participa (abertos primeiro).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ChallengeSummary" } }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [social]
+      operationId: createChallenge
+      summary: Cria um desafio e convida amigos que compartilham (push para os convidados).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateChallengeRequest" }
+      responses:
+        "201":
+          description: Criado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChallengeDetail" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /social/challenges/{id}:
+    get:
+      tags: [social]
+      operationId: getChallenge
+      summary: Desafio com o placar ao vivo (só participantes).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChallengeDetail" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /social/challenges/{id}/{action}:
+    post:
+      tags: [social]
+      operationId: actChallenge
+      summary: "accept/decline (convidado) ou cancel (quem criou, só aberto)."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: action, in: path, required: true, schema: { type: string, enum: [accept, decline, cancel] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChallengeDetail" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /games/{id}/compare/{friendId}:
+    get:
+      tags: [social]
+      operationId: compareGame
+      summary: Seus troféus deste jogo contra os de um amigo que compartilha.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: friendId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GameCompare" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /integrations:
     get:
       tags: [integrations]
@@ -1117,12 +1198,13 @@ components:
     NotificationPreferences:
       type: object
       additionalProperties: false
-      required: [unlocks, completions, reconnect, ai_ready]
+      required: [unlocks, completions, reconnect, ai_ready, challenges]
       properties:
         unlocks: { type: boolean, description: "Troféus novos." }
         completions: { type: boolean, description: "Platina / 100%." }
         reconnect: { type: boolean, description: "Conta precisa de ação (reautenticar a PSN, perfil Steam privado)." }
         ai_ready: { type: boolean, description: "Guia/roadmap pronto." }
+        challenges: { type: boolean, description: "Desafios entre amigos (convite, avanço, resultado)." }
     UnlockEvent:
       type: object
       required: [id, detected_at, trophy_id, name, description, type, icon, rarity_pct, earned_at, game_id, game_title, platform, external_id, cover, hero, completes_game]
@@ -1268,6 +1350,92 @@ components:
         share_progress:
           type: boolean
           description: Compartilha o progresso com os outros membros (e vê o deles). Opt-in, começa false.
+    ChallengeGame:
+      type: object
+      required: [title, platform, external_id, cover]
+      properties:
+        title: { type: string }
+        platform: { $ref: "#/components/schemas/Platform" }
+        external_id: { type: string }
+        cover: { type: string }
+    ChallengeSummary:
+      type: object
+      required: [id, kind, title, status, starts_at, ends_at, my_state, is_creator, accepted_count, winner_name, game]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [first_to_complete, most_trophies, most_rare] }
+        title: { type: string }
+        status: { type: string, enum: [open, finished, canceled] }
+        starts_at: { type: [string, "null"], format: date-time }
+        ends_at: { type: [string, "null"], format: date-time, description: "null = sem prazo (só first_to_complete)." }
+        my_state: { type: string, enum: [invited, accepted, declined] }
+        is_creator: { type: boolean }
+        accepted_count: { type: integer }
+        winner_name: { type: [string, "null"] }
+        game:
+          oneOf:
+            - $ref: "#/components/schemas/ChallengeGame"
+            - type: "null"
+    ChallengeStanding:
+      type: object
+      required: [user, state, score, has_game, earned, total, completion_pct, completed_at]
+      properties:
+        user: { $ref: "#/components/schemas/SocialUser" }
+        state: { type: string, enum: [invited, accepted, declined] }
+        score: { type: integer, description: "most_*: troféus (ou raros) obtidos na janela." }
+        has_game: { type: boolean }
+        earned: { type: integer }
+        total: { type: integer }
+        completion_pct: { type: number }
+        completed_at: { type: [string, "null"], format: date-time }
+    ChallengeDetail:
+      allOf:
+        - $ref: "#/components/schemas/ChallengeSummary"
+        - type: object
+          required: [finished_at, winner, standings]
+          properties:
+            finished_at: { type: [string, "null"], format: date-time }
+            winner:
+              oneOf:
+                - $ref: "#/components/schemas/SocialUser"
+                - type: "null"
+            standings: { type: array, items: { $ref: "#/components/schemas/ChallengeStanding" } }
+    CreateChallengeRequest:
+      type: object
+      required: [kind, friend_ids]
+      properties:
+        kind: { type: string, enum: [first_to_complete, most_trophies, most_rare] }
+        friend_ids: { type: array, minItems: 1, maxItems: 5, items: { type: string, format: uuid } }
+        game_id: { type: string, format: uuid, description: "Seu jogo (first_to_complete)." }
+        days: { type: integer, description: "most_*: 7, 14 ou 30 (padrão 7). first_to_complete: prazo opcional 7/14/30/60/90." }
+        title: { type: string, maxLength: 80 }
+    CompareTrophy:
+      type: object
+      required: [trophy_id, name, description, type, hidden, icon, rarity_pct, mine, mine_earned_at, friend, friend_earned_at, matched]
+      properties:
+        trophy_id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        type: { $ref: "#/components/schemas/TrophyType" }
+        hidden: { type: boolean }
+        icon: { type: string }
+        rarity_pct: { type: [number, "null"] }
+        mine: { type: boolean }
+        mine_earned_at: { type: [string, "null"], format: date-time }
+        friend: { type: boolean }
+        friend_earned_at: { type: [string, "null"], format: date-time }
+        matched: { type: boolean, description: "O troféu existe na versão do amigo (Steam × PSN casam pelo nome)." }
+    GameCompare:
+      type: object
+      required: [friend, same_platform, friend_platform, friend_earned, friend_total, friend_completion_pct, trophies]
+      properties:
+        friend: { $ref: "#/components/schemas/SocialUser" }
+        same_platform: { type: boolean }
+        friend_platform: { $ref: "#/components/schemas/Platform" }
+        friend_earned: { type: integer }
+        friend_total: { type: integer }
+        friend_completion_pct: { type: number }
+        trophies: { type: array, items: { $ref: "#/components/schemas/CompareTrophy" } }
     SocialUser:
       type: object
       required: [id, name, is_me]

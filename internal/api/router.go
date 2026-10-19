@@ -96,12 +96,19 @@ func NewRouter(d RouterDeps) http.Handler {
 			// Social (opt-in e recíproco — ver handlers_social.go).
 			r.Put("/me/sharing", h.putSharing)
 			r.Get("/games/{id}/friends", h.getGameFriends)
+			r.Get("/games/{id}/compare/{friendId}", h.compareGame)
 			r.Route("/social", func(r chi.Router) {
 				r.Use(requireSharing)
 				r.Get("/leaderboard", h.getLeaderboard)
 				r.Get("/feed", h.getFeed)
 				r.Get("/friends/{id}", h.getFriend)
 				r.Get("/friends/{id}/games", h.listFriendGames)
+				r.Get("/challenges", h.listChallenges)
+				r.Post("/challenges", h.createChallenge)
+				r.Get("/challenges/{id}", h.getChallenge)
+				r.Post("/challenges/{id}/accept", h.respondChallenge(true))
+				r.Post("/challenges/{id}/decline", h.respondChallenge(false))
+				r.Post("/challenges/{id}/cancel", h.cancelChallenge)
 			})
 
 			r.Get("/integrations", h.listIntegrations)

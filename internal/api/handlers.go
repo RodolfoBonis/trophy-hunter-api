@@ -8,6 +8,8 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/challenges"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
 
 	"log/slog"
@@ -33,6 +35,7 @@ type Handlers struct {
 	almostThreshold float64
 	authReady       func() bool
 	clientErrors    *clientErrorLimiter
+	challenges      *challenges.Service
 }
 
 // HandlerDeps injeta as dependências dos handlers.
@@ -52,6 +55,8 @@ type HandlerDeps struct {
 	AlmostThreshold float64
 	// AuthReady indica se o autenticador já carregou o provider OIDC (readyz). nil = sempre pronto.
 	AuthReady func() bool
+	// Queue: fila de jobs (push dos desafios). nil = desafios sem aviso.
+	Queue queue.Queue
 }
 
 // NewHandlers constrói os handlers.
@@ -70,6 +75,7 @@ func NewHandlers(d HandlerDeps) *Handlers {
 	}
 	return &Handlers{
 		clientErrors:    newClientErrorLimiter(clientErrorPerMinute),
+		challenges:      challenges.New(d.Queries, d.Queue, d.Logger),
 		q:               d.Queries,
 		pool:            d.Pool,
 		syncer:          d.Syncer,

@@ -16,8 +16,6 @@
 package sync
 
 import (
-	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
-
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,10 +29,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/challenges"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steam"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/crypto"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/metrics"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
 )
 
 // Kinds de job.
@@ -126,6 +126,7 @@ type Syncer struct {
 	// steamServerKey: Steam Web API key do servidor (contas sem key própria usam esta).
 	steamServerKey string
 	logger         *slog.Logger
+	challenges     *challenges.Service
 }
 
 // Deps injeta as dependências do Syncer.
@@ -142,6 +143,8 @@ type Deps struct {
 	// SteamServerKey: key do servidor para contas Steam sem key própria (amigos só informam o perfil).
 	SteamServerKey string
 	Logger         *slog.Logger
+	// Challenges reavalia os desafios ao fim de cada sync (nil = não avalia aqui).
+	Challenges *challenges.Service
 }
 
 // New constrói o Syncer.
@@ -156,6 +159,7 @@ func New(d Deps) *Syncer {
 		notifier:       d.Notifier,
 		steamServerKey: d.SteamServerKey,
 		logger:         d.Logger,
+		challenges:     d.Challenges,
 	}
 }
 

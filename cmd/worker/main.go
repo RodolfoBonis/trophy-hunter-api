@@ -10,10 +10,12 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	trophyhunter "github.com/RodolfoBonis/trophy-hunter-api"
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
 	migrations "github.com/RodolfoBonis/trophy-hunter-api/db/migrations"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/challenges"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/hltb"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/psn"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steam"
@@ -95,8 +97,10 @@ func run() error {
 	if !notifier.Enabled() {
 		logger.Warn("web push desligado: VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY ausentes")
 	}
+	challengeSvc := challenges.New(queries, jobs, logger)
 	syncer := syncpkg.New(syncpkg.Deps{
-		Queries: queries, Pool: pool, Queue: jobs, Cipher: cipher,
+		Challenges: challengeSvc,
+		Queries:    queries, Pool: pool, Queue: jobs, Cipher: cipher,
 		SteamFactory: steamFactory, Logger: logger, Notifier: notifier, SteamServerKey: cfg.Steam.ServerAPIKey,
 		PSN: psn.New(psn.Options{AuthBaseURL: cfg.PSN.AuthBaseURL, APIBaseURL: cfg.PSN.APIBaseURL, Lang: cfg.PSN.Lang, RPS: cfg.PSN.RPS, Burst: cfg.PSN.Burst, Logger: logger}),
 	})
@@ -110,6 +114,22 @@ func run() error {
 	go func() {
 		defer wg.Done()
 		worker.Run(ctx)
+	}()
+
+	// Desafios: prazos vencem sem sync nenhum — reavalia a cada 5 min.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		t := time.NewTicker(5 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				challengeSvc.EvaluateAll(ctx)
+			}
+		}
 	}()
 
 	// Estimativas de tempo (HowLongToBeat) em segundo plano — melhor esforço, sem API oficial.

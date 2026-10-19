@@ -60,6 +60,33 @@ type BestGame struct {
 	AccountRank     int64
 }
 
+type Challenge struct {
+	ID              pgtype.UUID
+	CreatorID       pgtype.UUID
+	Kind            string
+	Title           string
+	GamePlatform    *string
+	GameExternalID  *string
+	NormalizedTitle *string
+	GameTitle       *string
+	GameCover       *string
+	StartsAt        pgtype.Timestamptz
+	EndsAt          pgtype.Timestamptz
+	Status          string
+	WinnerID        pgtype.UUID
+	FinishedAt      pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+}
+
+type ChallengeParticipant struct {
+	ChallengeID   pgtype.UUID
+	UserID        pgtype.UUID
+	State         string
+	CompletedAt   pgtype.Timestamptz
+	LastMilestone int16
+	RespondedAt   pgtype.Timestamptz
+}
+
 type ChatMessage struct {
 	ID        pgtype.UUID
 	ThreadID  pgtype.UUID

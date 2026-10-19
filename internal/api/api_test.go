@@ -123,7 +123,7 @@ func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, ru
 
 	authn := auth.New(context.Background(), config.Auth{Mode: config.AuthModeDev, RequiredRole: "trophy-hunter-user"}, logger)
 
-	deps := api.HandlerDeps{Queries: q, Pool: pool, Syncer: syncer, Logger: logger, Push: notifier, OwnerEmail: ownerEmail, AppURL: "https://trophy.test"}
+	deps := api.HandlerDeps{Queries: q, Pool: pool, Syncer: syncer, Logger: logger, Push: notifier, Queue: jobs, OwnerEmail: ownerEmail, AppURL: "https://trophy.test"}
 	var aiSvc *ai.Service
 	if runner != nil {
 		rdb := testsupport.NewRedis(t)

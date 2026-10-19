@@ -465,6 +465,9 @@ func (s *Syncer) onRunClose(ctx context.Context, integID pgtype.UUID, scope stri
 	}
 	s.AutoLink(ctx)
 	s.enqueueUnlocksNotice(ctx)
+	if s.challenges != nil {
+		s.challenges.EvaluateAll(ctx) // alguém pode ter fechado o jogo de um desafio neste sync
+	}
 	if gamesFailed == 0 {
 		metrics.SyncRun(scope, "ok")
 		if err := s.q.MarkIntegrationSynced(ctx, dbgen.MarkIntegrationSyncedParams{

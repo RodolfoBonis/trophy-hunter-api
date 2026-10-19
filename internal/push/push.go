@@ -40,6 +40,7 @@ const (
 	KindCompletions Kind = "completions" // platina / 100% — sai junto com KindUnlocks
 	KindReconnect   Kind = "reconnect"   // conta precisa de ação do usuário (NPSSO novo, perfil público)
 	KindAIReady     Kind = "ai_ready"    // guia/roadmap pronto
+	KindChallenges  Kind = "challenges"  // desafios entre amigos: convite, avanço e resultado
 	KindTest        Kind = "test"        // botão "Enviar teste" (ignora preferências)
 )
 
@@ -333,11 +334,12 @@ type Preferences struct {
 	Completions bool `json:"completions"`
 	Reconnect   bool `json:"reconnect"`
 	AIReady     bool `json:"ai_ready"`
+	Challenges  bool `json:"challenges"`
 }
 
 // DefaultPreferences devolve tudo ligado.
 func DefaultPreferences() Preferences {
-	return Preferences{Unlocks: true, Completions: true, Reconnect: true, AIReady: true}
+	return Preferences{Unlocks: true, Completions: true, Reconnect: true, AIReady: true, Challenges: true}
 }
 
 // Allows indica se o tipo está ligado.
@@ -351,6 +353,8 @@ func (p Preferences) Allows(k Kind) bool {
 		return p.Reconnect
 	case KindAIReady:
 		return p.AIReady
+	case KindChallenges:
+		return p.Challenges
 	default:
 		return true
 	}

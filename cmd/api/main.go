@@ -101,7 +101,7 @@ func run() error {
 	}
 
 	handlers := api.NewHandlers(api.HandlerDeps{
-		Queries: queries, Pool: pool, Syncer: syncer, Logger: logger,
+		Queries: queries, Pool: pool, Syncer: syncer, Logger: logger, Queue: jobs,
 		AI: aiSvc, Redis: rdb, OwnerEmail: cfg.Auth.OwnerEmail, AppURL: cfg.HTTP.AppURL,
 		Push:      push.New(queries, push.Config{PublicKey: cfg.Push.VAPIDPublicKey, PrivateKey: cfg.Push.VAPIDPrivateKey, Subject: cfg.Push.VAPIDSubject}, nil, logger),
 		AuthReady: authenticator.Ready,
