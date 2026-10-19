@@ -7,6 +7,9 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
+	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai/stream"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/metrics"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
@@ -36,7 +39,7 @@ func (w *Worker) Run(ctx context.Context) {
 	w.logger.Info("ai-worker iniciado", slog.Duration("job_timeout", w.jobTimeout))
 	for ctx.Err() == nil {
 		// O lease cobre o timeout da execução com folga: outro worker só assume se este morrer.
-		job, err := w.queue.Claim(ctx, w.jobTimeout+2*time.Minute, KindGuide, KindChat)
+		job, err := w.queue.Claim(ctx, w.jobTimeout+2*time.Minute, KindGuide, KindChat, KindRecap)
 		if err != nil {
 			w.logger.Error("ai: claim falhou", slog.String("err", err.Error()))
 		}
@@ -104,6 +107,16 @@ func (s *Service) giveUp(ctx context.Context, job queue.Job) {
 		if id, err := parseUUID(p.MessageID); err == nil {
 			_ = s.q.FailChatMessage(ctx, dbFailChat(id, msg))
 			_ = stream.NewPublisher(ctx, s.rdb, p.MessageID).Close(ctx, stream.TypeError, msg)
+		}
+	case KindRecap:
+		var p recapPayload
+		if json.Unmarshal(job.Payload, &p) != nil {
+			return
+		}
+		uid, err := parseUUID(p.UserID)
+		week, werr := time.Parse("2006-01-02", p.Week)
+		if err == nil && werr == nil {
+			_ = s.q.FailRecap(ctx, dbgen.FailRecapParams{UserID: uid, Week: pgtype.Date{Time: week, Valid: true}, Error: ptr(msg)})
 		}
 	}
 }

@@ -15,6 +15,7 @@ import (
 	trophyhunter "github.com/RodolfoBonis/trophy-hunter-api"
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
 	migrations "github.com/RodolfoBonis/trophy-hunter-api/db/migrations"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/challenges"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/hltb"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/psn"
@@ -28,6 +29,7 @@ import (
 	redisplat "github.com/RodolfoBonis/trophy-hunter-api/internal/platform/redis"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/telemetry"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/recap"
 	syncpkg "github.com/RodolfoBonis/trophy-hunter-api/internal/sync"
 
 	"github.com/redis/go-redis/v9"
@@ -128,6 +130,34 @@ func run() error {
 				return
 			case <-t.C:
 				challengeSvc.EvaluateAll(ctx)
+			}
+		}
+	}()
+
+	// Resumo semanal da IA: domingo a partir das 18h (Brasília), para quem ligou nas preferências.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		t := time.NewTicker(30 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if !recap.WeeklyDue(time.Now()) {
+					continue
+				}
+				users, err := queries.WeeklyRecapUsers(ctx)
+				if err != nil {
+					logger.Warn("resumo semanal: listar usuários falhou", slog.String("err", err.Error()))
+					continue
+				}
+				for _, u := range users {
+					if _, err := ai.EnqueueWeeklyRecap(ctx, queries, jobs, u, recap.WeekStart(time.Now())); err != nil {
+						logger.Warn("resumo semanal: enfileirar falhou", slog.String("err", err.Error()))
+					}
+				}
 			}
 		}
 	}()

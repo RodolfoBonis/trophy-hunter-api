@@ -81,3 +81,19 @@ func TestValidateGuideWhereIsOptionalForV1(t *testing.T) {
 	require.NoError(t, err, "guias v1 (sem where) continuam válidos")
 	require.Contains(t, TrophyGuideSchema, `"required":["where"`, "o modelo é obrigado a preencher where")
 }
+
+func TestValidateRecap(t *testing.T) {
+	ok := `{"headline":" Boa semana ","highlights":["a",""," b "],"suggestions":[{"game":"Hades","why":"curto","trophies":[""]}],"encouragement":"vai"}`
+	out, err := ValidateRecap([]byte(ok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), `""`) {
+		t.Fatalf("itens vazios deveriam sair: %s", out)
+	}
+	for _, bad := range []string{`{"headline":"","highlights":[],"suggestions":[],"encouragement":""}`, `{"headline":"x"}`, `{"headline":"x","highlights":[],"suggestions":[],"encouragement":"","extra":1}`} {
+		if _, err := ValidateRecap([]byte(bad)); err == nil {
+			t.Fatalf("deveria rejeitar: %s", bad)
+		}
+	}
+}

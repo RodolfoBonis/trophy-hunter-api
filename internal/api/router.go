@@ -127,6 +127,9 @@ func NewRouter(d RouterDeps) http.Handler {
 			r.Get("/sync-runs", h.listSyncRuns)
 
 			r.Get("/stats", h.getStats)
+			r.Get("/recap", h.getRecap)
+			r.Get("/recap/weekly", h.getWeeklyRecap)
+			r.Post("/recap/weekly", h.generateWeeklyRecap)
 			r.Get("/next", h.getNext)
 			r.Get("/timeline", h.getTimeline)
 			r.Get("/alerts", h.getAlerts)

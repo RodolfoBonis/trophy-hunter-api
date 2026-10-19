@@ -32,6 +32,17 @@ type AiGuideEdit struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
+type AiRecap struct {
+	UserID    pgtype.UUID
+	Week      pgtype.Date
+	Status    string
+	Content   []byte
+	Error     *string
+	Model     *string
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
 type AiRequest struct {
 	ID        pgtype.UUID
 	UserID    pgtype.UUID

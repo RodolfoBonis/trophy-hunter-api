@@ -225,6 +225,12 @@ func (s *Service) Handle(ctx context.Context, job queue.Job) error {
 			return queue.Permanent(err)
 		}
 		return s.handleChat(ctx, p)
+	case KindRecap:
+		var p recapPayload
+		if err := json.Unmarshal(job.Payload, &p); err != nil {
+			return queue.Permanent(err)
+		}
+		return s.handleRecap(ctx, p)
 	default:
 		return queue.Permanent(fmt.Errorf("ai: job desconhecido %q", job.Kind))
 	}

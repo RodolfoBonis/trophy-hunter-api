@@ -154,6 +154,15 @@ assinatura → o job é reagendado com backoff. Para rodar local: `CLAUDE_CODE_O
 - **Steam**: sem API key, a conta usa a de outra conta da mesma pessoa ou `STEAM_SERVER_API_KEY`.
 
 
+## Retrospectiva e resumo semanal da IA
+
+`GET /recap?period=AAAA-MM|AAAA` calcula na hora (fuso de Brasília, pacote `internal/recap`):
+totais por tipo, raros, jogos, dias ativos, maior sequência, dia favorito, top jogos, mais raros e
+jogos fechados, com o total do período anterior. O **resumo semanal** (opt-in em
+`weekly_recap` nas preferências) é um job `ai_recap` do ai-worker (Sonnet, JSON Schema, sem
+pesquisa — só os dados da semana e a fila Próxima Platina): o worker agenda domingo a partir das 18h;
+`POST /recap/weekly` gera na hora. Um por pessoa e semana (`ai_recaps`), não conta no teto diário.
+
 ## Tempo para platinar (HowLongToBeat)
 
 O worker preenche `game_estimates` aos poucos (lote de `HLTB_BATCH` títulos a cada `HLTB_INTERVAL`,

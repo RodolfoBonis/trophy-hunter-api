@@ -36,6 +36,7 @@ type Handlers struct {
 	authReady       func() bool
 	clientErrors    *clientErrorLimiter
 	challenges      *challenges.Service
+	queue           queue.Queue
 }
 
 // HandlerDeps injeta as dependências dos handlers.
@@ -76,6 +77,7 @@ func NewHandlers(d HandlerDeps) *Handlers {
 	return &Handlers{
 		clientErrors:    newClientErrorLimiter(clientErrorPerMinute),
 		challenges:      challenges.New(d.Queries, d.Queue, d.Logger),
+		queue:           d.Queue,
 		q:               d.Queries,
 		pool:            d.Pool,
 		syncer:          d.Syncer,

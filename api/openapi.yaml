@@ -281,6 +281,58 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /recap:
+    get:
+      tags: [insights]
+      operationId: getRecap
+      summary: Retrospectiva ("Wrapped") de um mês ou ano.
+      parameters:
+        - name: period
+          in: query
+          description: "AAAA-MM ou AAAA (padrão: mês corrente)."
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Recap" }
+        "400": { $ref: "#/components/responses/Problem" }
+
+  /recap/weekly:
+    get:
+      tags: [ai]
+      operationId: getWeeklyRecap
+      summary: Resumo semanal da IA mais recente (recap null = nunca houve).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recap]
+                properties:
+                  recap:
+                    oneOf:
+                      - $ref: "#/components/schemas/WeeklyRecap"
+                      - type: "null"
+    post:
+      tags: [ai]
+      operationId: generateWeeklyRecap
+      summary: Gera o resumo desta semana agora (se ainda não houver). Não conta no teto diário.
+      responses:
+        "202":
+          description: Pendente ou já existente
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recap]
+                properties:
+                  recap: { $ref: "#/components/schemas/WeeklyRecap" }
+        "503": { $ref: "#/components/responses/Problem" }
+
   /integrations:
     get:
       tags: [integrations]
@@ -1198,13 +1250,14 @@ components:
     NotificationPreferences:
       type: object
       additionalProperties: false
-      required: [unlocks, completions, reconnect, ai_ready, challenges]
+      required: [unlocks, completions, reconnect, ai_ready, challenges, weekly_recap]
       properties:
         unlocks: { type: boolean, description: "Troféus novos." }
         completions: { type: boolean, description: "Platina / 100%." }
         reconnect: { type: boolean, description: "Conta precisa de ação (reautenticar a PSN, perfil Steam privado)." }
         ai_ready: { type: boolean, description: "Guia/roadmap pronto." }
         challenges: { type: boolean, description: "Desafios entre amigos (convite, avanço, resultado)." }
+        weekly_recap: { type: boolean, description: "Resumo semanal da IA (domingo à noite). Opt-in: liga a geração e o aviso." }
     UnlockEvent:
       type: object
       required: [id, detected_at, trophy_id, name, description, type, icon, rarity_pct, earned_at, game_id, game_title, platform, external_id, cover, hero, completes_game]
@@ -1350,6 +1403,99 @@ components:
         share_progress:
           type: boolean
           description: Compartilha o progresso com os outros membros (e vê o deles). Opt-in, começa false.
+    Recap:
+      type: object
+      description: Retrospectiva do período (calculada na hora; fuso de Brasília; jogos pela conta mais avançada).
+      required: [period, label, partial, earned, previous_earned, platinum, gold, silver, bronze, achievements, rare, games, active_days, longest_streak, favorite_weekday, best_day, best_day_count, top_games, rarest, completions]
+      properties:
+        period: { type: string, example: "2026-10" }
+        label: { type: string, example: "outubro de 2026" }
+        partial: { type: boolean, description: "O período ainda não acabou." }
+        earned: { type: integer }
+        previous_earned: { type: integer, description: "Mesmo total no período anterior." }
+        platinum: { type: integer }
+        gold: { type: integer }
+        silver: { type: integer }
+        bronze: { type: integer }
+        achievements: { type: integer }
+        rare: { type: integer }
+        games: { type: integer }
+        active_days: { type: integer }
+        longest_streak: { type: integer }
+        favorite_weekday: { type: string }
+        best_day: { type: [string, "null"], format: date-time }
+        best_day_count: { type: integer }
+        top_games:
+          type: array
+          items:
+            type: object
+            required: [game_id, title, platform, external_id, cover, hero, unlocked, earned, total]
+            properties:
+              game_id: { type: string, format: uuid }
+              title: { type: string }
+              platform: { $ref: "#/components/schemas/Platform" }
+              external_id: { type: string }
+              cover: { type: string }
+              hero: { type: string }
+              unlocked: { type: integer }
+              earned: { type: integer }
+              total: { type: integer }
+        rarest:
+          type: array
+          items:
+            type: object
+            required: [name, type, hidden, icon, rarity_pct, earned_at, game_title, platform]
+            properties:
+              name: { type: string }
+              type: { $ref: "#/components/schemas/TrophyType" }
+              hidden: { type: boolean }
+              icon: { type: string }
+              rarity_pct: { type: number }
+              earned_at: { type: [string, "null"], format: date-time }
+              game_title: { type: string }
+              platform: { $ref: "#/components/schemas/Platform" }
+        completions:
+          type: array
+          items:
+            type: object
+            required: [game_id, title, platform, external_id, cover, hero, total]
+            properties:
+              game_id: { type: string, format: uuid }
+              title: { type: string }
+              platform: { $ref: "#/components/schemas/Platform" }
+              external_id: { type: string }
+              cover: { type: string }
+              hero: { type: string }
+              total: { type: integer }
+              completed_at: { type: [string, "null"], format: date-time }
+    WeeklyRecapContent:
+      type: object
+      required: [headline, highlights, suggestions, encouragement]
+      properties:
+        headline: { type: string }
+        highlights: { type: array, items: { type: string } }
+        suggestions:
+          type: array
+          items:
+            type: object
+            required: [game, why, trophies]
+            properties:
+              game: { type: string }
+              why: { type: string }
+              trophies: { type: array, items: { type: string } }
+        encouragement: { type: string }
+    WeeklyRecap:
+      type: object
+      required: [week, status, content, error, updated_at]
+      properties:
+        week: { type: string, format: date, description: "Segunda-feira da semana." }
+        status: { type: string, enum: [pending, ready, error] }
+        content:
+          oneOf:
+            - $ref: "#/components/schemas/WeeklyRecapContent"
+            - type: "null"
+        error: { type: [string, "null"] }
+        updated_at: { type: [string, "null"], format: date-time }
     ChallengeGame:
       type: object
       required: [title, platform, external_id, cover]

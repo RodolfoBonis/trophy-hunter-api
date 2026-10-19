@@ -36,12 +36,13 @@ type Kind string
 
 // Tipos de notificação.
 const (
-	KindUnlocks     Kind = "unlocks"     // troféus novos (agregados) — calculado na hora do envio
-	KindCompletions Kind = "completions" // platina / 100% — sai junto com KindUnlocks
-	KindReconnect   Kind = "reconnect"   // conta precisa de ação do usuário (NPSSO novo, perfil público)
-	KindAIReady     Kind = "ai_ready"    // guia/roadmap pronto
-	KindChallenges  Kind = "challenges"  // desafios entre amigos: convite, avanço e resultado
-	KindTest        Kind = "test"        // botão "Enviar teste" (ignora preferências)
+	KindUnlocks     Kind = "unlocks"      // troféus novos (agregados) — calculado na hora do envio
+	KindCompletions Kind = "completions"  // platina / 100% — sai junto com KindUnlocks
+	KindReconnect   Kind = "reconnect"    // conta precisa de ação do usuário (NPSSO novo, perfil público)
+	KindAIReady     Kind = "ai_ready"     // guia/roadmap pronto
+	KindChallenges  Kind = "challenges"   // desafios entre amigos: convite, avanço e resultado
+	KindWeeklyRecap Kind = "weekly_recap" // resumo semanal da IA (opt-in)
+	KindTest        Kind = "test"         // botão "Enviar teste" (ignora preferências)
 )
 
 // Payload é o conteúdo do job `notify`. Para KindUnlocks título/corpo são calculados no envio.
@@ -335,6 +336,8 @@ type Preferences struct {
 	Reconnect   bool `json:"reconnect"`
 	AIReady     bool `json:"ai_ready"`
 	Challenges  bool `json:"challenges"`
+	// WeeklyRecap liga o resumo semanal da IA (gera E avisa) — opt-in, começa desligado.
+	WeeklyRecap bool `json:"weekly_recap"`
 }
 
 // DefaultPreferences devolve tudo ligado.
@@ -355,6 +358,8 @@ func (p Preferences) Allows(k Kind) bool {
 		return p.AIReady
 	case KindChallenges:
 		return p.Challenges
+	case KindWeeklyRecap:
+		return p.WeeklyRecap
 	default:
 		return true
 	}

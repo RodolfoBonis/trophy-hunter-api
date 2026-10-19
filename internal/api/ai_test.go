@@ -73,7 +73,7 @@ func (e *testEnv) drainAI(t *testing.T) []error {
 	ctx := context.Background()
 	var errs []error
 	for i := 0; i < 20; i++ {
-		job, err := e.queue.Claim(ctx, time.Minute, ai.KindGuide, ai.KindChat)
+		job, err := e.queue.Claim(ctx, time.Minute, ai.KindGuide, ai.KindChat, ai.KindRecap)
 		require.NoError(t, err)
 		if job == nil {
 			return errs
