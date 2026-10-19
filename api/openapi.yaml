@@ -27,6 +27,11 @@ tags:
       Multiusuário — convites e membros (só o dono). Cada pessoa vê apenas os próprios dados; recursos
       de outra pessoa respondem 404. Guias de troféu são compartilhados (edição privada); roadmap e
       chat são de cada um. Membros têm teto diário de IA (429 code ai_daily_limit).
+  - name: social
+    description: >
+      Recursos entre membros (perfil do amigo, "amigos neste jogo", feed e ranking). OPT-IN e
+      RECÍPROCO: só aparece quem ligou PUT /me/sharing, e só vê os outros quem também ligou (senão 403
+      code sharing_disabled). Membro que não compartilha é invisível (404). Tudo é só leitura.
   - name: ai
     description: >
       Guias por troféu, roadmap de platina e chat por jogo, gerados por IA (Claude Code headless no
@@ -45,6 +50,130 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/User" }
         "401": { $ref: "#/components/responses/Problem" }
+
+  /me/sharing:
+    put:
+      tags: [social]
+      operationId: putSharing
+      summary: Liga/desliga "compartilhar meu progresso com os amigos" (opt-in).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [share_progress]
+              properties:
+                share_progress: { type: boolean }
+      responses:
+        "200":
+          description: Usuário atualizado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /social/leaderboard:
+    get:
+      tags: [social]
+      operationId: getLeaderboard
+      summary: Placar entre os membros que compartilham (inclui você).
+      parameters:
+        - name: period
+          in: query
+          schema: { type: string, enum: [month, year, all], default: all }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Leaderboard" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /social/feed:
+    get:
+      tags: [social]
+      operationId: getFeed
+      summary: Platinas, jogos fechados e troféus raros (< 5%) dos membros que compartilham.
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 40 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeedPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /social/friends/{id}:
+    get:
+      tags: [social]
+      operationId: getFriend
+      summary: Perfil de um membro que compartilha (resumo igual ao /stats).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FriendProfile" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /social/friends/{id}/games:
+    get:
+      tags: [social]
+      operationId: listFriendGames
+      summary: Biblioteca de um membro que compartilha (só leitura; mesmos filtros do GET /games).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/GameStatus" }
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [completion, remaining, last_played, title, rarity], default: last_played }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GameListPage" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /games/{id}/friends:
+    get:
+      tags: [social]
+      operationId: getGameFriends
+      summary: Progresso dos amigos (que compartilham) no mesmo jogo — Steam × PSN pelo título.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GameFriends" }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /integrations:
     get:
@@ -1103,7 +1232,7 @@ components:
       description: >
         Usuário do app. status pending = logou mas ainda não aceitou convite (só /me e o aceite
         funcionam; o resto responde 403 code not_invited); removed = acesso revogado pelo dono.
-      required: [id, subject, email, name, role, status]
+      required: [id, subject, email, name, role, status, share_progress]
       properties:
         id: { type: string, format: uuid }
         subject: { type: string }
@@ -1111,6 +1240,83 @@ components:
         name: { type: string }
         role: { type: string, enum: [owner, member] }
         status: { type: string, enum: [pending, active, removed] }
+        share_progress:
+          type: boolean
+          description: Compartilha o progresso com os outros membros (e vê o deles). Opt-in, começa false.
+    SocialUser:
+      type: object
+      required: [id, name, is_me]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        is_me: { type: boolean }
+    LeaderboardItem:
+      type: object
+      required: [user, platinum, earned, rare, psn_points, completed, last_unlock_at]
+      properties:
+        user: { $ref: "#/components/schemas/SocialUser" }
+        platinum: { type: integer }
+        earned: { type: integer, description: Troféus/conquistas obtidos no período. }
+        rare: { type: integer, description: Obtidos com raridade < 5%. }
+        psn_points: { type: integer, description: "Pontos PSN (15/30/90/300) no período." }
+        completed: { type: integer, description: Jogos fechados (platina/100%) no período. }
+        last_unlock_at: { type: [string, "null"], format: date-time }
+    Leaderboard:
+      type: object
+      required: [period, items]
+      properties:
+        period: { type: string, enum: [month, year, all] }
+        items: { type: array, items: { $ref: "#/components/schemas/LeaderboardItem" } }
+    FeedItem:
+      type: object
+      required: [user, kind, trophy_id, name, description, type, hidden, icon, rarity_pct, earned_at,
+                 game_title, platform, external_id, cover, hero, completes_game]
+      properties:
+        user: { $ref: "#/components/schemas/SocialUser" }
+        kind: { type: string, enum: [platinum, completion, rare] }
+        trophy_id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: [string, "null"], description: "null em troféu oculto (spoiler)." }
+        type: { $ref: "#/components/schemas/TrophyType" }
+        hidden: { type: boolean }
+        icon: { type: string }
+        rarity_pct: { type: [number, "null"] }
+        earned_at: { type: [string, "null"], format: date-time }
+        game_title: { type: string }
+        platform: { $ref: "#/components/schemas/Platform" }
+        external_id: { type: string }
+        cover: { type: string }
+        hero: { type: string }
+        completes_game: { type: boolean }
+    FeedPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/FeedItem" } }
+        next_cursor: { type: [string, "null"] }
+    FriendProfile:
+      type: object
+      required: [user, stats]
+      properties:
+        user: { $ref: "#/components/schemas/SocialUser" }
+        stats: { $ref: "#/components/schemas/Stats" }
+    GameFriend:
+      type: object
+      required: [user, platform, earned, total, completion_pct, has_platinum, last_unlock_at]
+      properties:
+        user: { $ref: "#/components/schemas/SocialUser" }
+        platform: { $ref: "#/components/schemas/Platform" }
+        earned: { type: integer }
+        total: { type: integer }
+        completion_pct: { type: number }
+        has_platinum: { type: boolean }
+        last_unlock_at: { type: [string, "null"], format: date-time }
+    GameFriends:
+      type: object
+      required: [sharing, items]
+      properties:
+        sharing: { type: boolean, description: "false = quem pede não compartilha (items vazio)." }
+        items: { type: array, items: { $ref: "#/components/schemas/GameFriend" } }
     Invite:
       type: object
       required: [id, expires_at, max_uses, used_count, created_at]

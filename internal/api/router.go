@@ -90,6 +90,17 @@ func NewRouter(d RouterDeps) http.Handler {
 				r.Delete("/members/{id}", h.removeMember)
 			})
 
+			// Social (opt-in e recíproco — ver handlers_social.go).
+			r.Put("/me/sharing", h.putSharing)
+			r.Get("/games/{id}/friends", h.getGameFriends)
+			r.Route("/social", func(r chi.Router) {
+				r.Use(requireSharing)
+				r.Get("/leaderboard", h.getLeaderboard)
+				r.Get("/feed", h.getFeed)
+				r.Get("/friends/{id}", h.getFriend)
+				r.Get("/friends/{id}/games", h.listFriendGames)
+			})
+
 			r.Get("/integrations", h.listIntegrations)
 			r.Post("/integrations/steam", h.connectSteam)
 			r.Post("/integrations/psn", h.connectPSN)

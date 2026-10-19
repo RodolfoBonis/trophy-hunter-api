@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -92,32 +93,35 @@ type statsDTO struct {
 
 // getStats devolve o resumo do dashboard — GET /stats. Jogos contam uma vez (conta mais avançada).
 func (h *Handlers) getStats(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	uid := currentUser(r).ID
-	games, err := h.q.StatsGames(ctx, dbgen.StatsGamesParams{UserID: uid, Almost: h.almostThreshold})
+	out, err := h.statsFor(r.Context(), currentUser(r).ID)
 	if err != nil {
 		writeInternal(w, r, err)
 		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// statsFor monta o resumo de um usuário (o próprio, ou um amigo que compartilha — ver social).
+func (h *Handlers) statsFor(ctx context.Context, uid pgtype.UUID) (statsDTO, error) {
+	games, err := h.q.StatsGames(ctx, dbgen.StatsGamesParams{UserID: uid, Almost: h.almostThreshold})
+	if err != nil {
+		return statsDTO{}, err
 	}
 	tr, err := h.q.StatsTrophies(ctx, uid)
 	if err != nil {
-		writeInternal(w, r, err)
-		return
+		return statsDTO{}, err
 	}
 	rarest, err := h.q.RarestEarned(ctx, dbgen.RarestEarnedParams{UserID: uid, Lim: rarestLimit})
 	if err != nil {
-		writeInternal(w, r, err)
-		return
+		return statsDTO{}, err
 	}
 	comps, err := h.q.RecentCompletions(ctx, dbgen.RecentCompletionsParams{UserID: uid, Lim: completionsLimit})
 	if err != nil {
-		writeInternal(w, r, err)
-		return
+		return statsDTO{}, err
 	}
 	evo, err := h.q.Evolution(ctx, uid)
 	if err != nil {
-		writeInternal(w, r, err)
-		return
+		return statsDTO{}, err
 	}
 
 	out := statsDTO{
@@ -157,7 +161,7 @@ func (h *Handlers) getStats(w http.ResponseWriter, r *http.Request) {
 		cum += int(e.Earned)
 		out.Evolution = append(out.Evolution, evolutionDTO{Month: e.Month, Earned: int(e.Earned), Cumulative: cum})
 	}
-	writeJSON(w, http.StatusOK, out)
+	return out, nil
 }
 
 // --- GET /next ----------------------------------------------------------------------------------

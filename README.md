@@ -153,6 +153,13 @@ assinatura → o job é reagendado com backoff. Para rodar local: `CLAUDE_CODE_O
   chat são de cada um; membros têm teto `AI_DAILY_LIMIT`/24 h.
 - **Steam**: sem API key, a conta usa a de outra conta da mesma pessoa ou `STEAM_SERVER_API_KEY`.
 
+
+## Social (opt-in)
+
+Entre membros: perfil do amigo (`/social/friends/{id}` + biblioteca só leitura), "amigos neste jogo"
+(`/games/{id}/friends`, Steam × PSN pelo título normalizado), feed de momentos (platinas, jogos
+fechados, troféus < 5%) e ranking por mês/ano/sempre. **Opt-in e recíproco**: cada pessoa liga
+`PUT /me/sharing`; quem não compartilha é invisível (404) e não vê os outros (403 `sharing_disabled`).
 ## Avisos e notificações
 
 - **Avisos no app:** o sync grava `unlock_events` para troféus obtidos DEPOIS do sync inicial; o web

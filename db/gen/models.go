@@ -274,15 +274,17 @@ type UnlockEvent struct {
 }
 
 type User struct {
-	ID         pgtype.UUID
-	Issuer     string
-	Subject    *string
-	Email      string
-	Name       string
-	Role       string
-	Status     string
-	InvitedBy  pgtype.UUID
-	LastSeenAt pgtype.Timestamptz
-	CreatedAt  pgtype.Timestamptz
-	UpdatedAt  pgtype.Timestamptz
+	ID              pgtype.UUID
+	Issuer          string
+	Subject         *string
+	Email           string
+	Name            string
+	Role            string
+	Status          string
+	InvitedBy       pgtype.UUID
+	LastSeenAt      pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	ShareProgress   bool
+	ShareProgressAt pgtype.Timestamptz
 }

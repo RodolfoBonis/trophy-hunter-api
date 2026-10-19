@@ -14,7 +14,7 @@ import (
 const activateUser = `-- name: ActivateUser :one
 UPDATE users SET status = 'active', invited_by = $2, updated_at = now()
 WHERE id = $1 AND status IN ('pending', 'removed')
-RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at
+RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at
 `
 
 type ActivateUserParams struct {
@@ -38,6 +38,8 @@ func (q *Queries) ActivateUser(ctx context.Context, arg ActivateUserParams) (Use
 		&i.LastSeenAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ShareProgress,
+		&i.ShareProgressAt,
 	)
 	return i, err
 }
@@ -45,7 +47,7 @@ func (q *Queries) ActivateUser(ctx context.Context, arg ActivateUserParams) (Use
 const claimOwner = `-- name: ClaimOwner :one
 UPDATE users SET issuer = $2, subject = $3, email = $4, name = $5, last_seen_at = now(), updated_at = now()
 WHERE id = $1 AND role = 'owner'
-RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at
+RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at
 `
 
 type ClaimOwnerParams struct {
@@ -79,6 +81,8 @@ func (q *Queries) ClaimOwner(ctx context.Context, arg ClaimOwnerParams) (User, e
 		&i.LastSeenAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ShareProgress,
+		&i.ShareProgressAt,
 	)
 	return i, err
 }
@@ -132,7 +136,7 @@ func (q *Queries) CreateInvite(ctx context.Context, arg CreateInviteParams) (Inv
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (issuer, subject, email, name) VALUES ($1, $2, $3, $4)
 ON CONFLICT (issuer, subject) WHERE subject IS NOT NULL DO UPDATE SET updated_at = now()
-RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at
+RETURNING id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at
 `
 
 type CreateUserParams struct {
@@ -163,6 +167,8 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.LastSeenAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ShareProgress,
+		&i.ShareProgressAt,
 	)
 	return i, err
 }
@@ -181,7 +187,7 @@ func (q *Queries) DeleteMember(ctx context.Context, id pgtype.UUID) (int64, erro
 }
 
 const getOwner = `-- name: GetOwner :one
-SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at FROM users WHERE role = 'owner'
+SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at FROM users WHERE role = 'owner'
 `
 
 func (q *Queries) GetOwner(ctx context.Context) (User, error) {
@@ -199,12 +205,14 @@ func (q *Queries) GetOwner(ctx context.Context) (User, error) {
 		&i.LastSeenAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ShareProgress,
+		&i.ShareProgressAt,
 	)
 	return i, err
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at FROM users WHERE id = $1
+SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUser(ctx context.Context, id pgtype.UUID) (User, error) {
@@ -222,13 +230,15 @@ func (q *Queries) GetUser(ctx context.Context, id pgtype.UUID) (User, error) {
 		&i.LastSeenAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ShareProgress,
+		&i.ShareProgressAt,
 	)
 	return i, err
 }
 
 const getUserByIdentity = `-- name: GetUserByIdentity :one
 
-SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at FROM users WHERE issuer = $1 AND subject = $2
+SELECT id, issuer, subject, email, name, role, status, invited_by, last_seen_at, created_at, updated_at, share_progress, share_progress_at FROM users WHERE issuer = $1 AND subject = $2
 `
 
 type GetUserByIdentityParams struct {
@@ -252,6 +262,8 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.LastSeenAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ShareProgress,
+		&i.ShareProgressAt,
 	)
 	return i, err
 }
@@ -293,25 +305,27 @@ func (q *Queries) ListInvites(ctx context.Context) ([]Invite, error) {
 }
 
 const listMembers = `-- name: ListMembers :many
-SELECT u.id, u.issuer, u.subject, u.email, u.name, u.role, u.status, u.invited_by, u.last_seen_at, u.created_at, u.updated_at, (SELECT count(*) FROM integrations i WHERE i.user_id = u.id)::int AS accounts
+SELECT u.id, u.issuer, u.subject, u.email, u.name, u.role, u.status, u.invited_by, u.last_seen_at, u.created_at, u.updated_at, u.share_progress, u.share_progress_at, (SELECT count(*) FROM integrations i WHERE i.user_id = u.id)::int AS accounts
 FROM users u
 WHERE u.status <> 'pending'
 ORDER BY (u.role = 'owner') DESC, u.created_at
 `
 
 type ListMembersRow struct {
-	ID         pgtype.UUID
-	Issuer     string
-	Subject    *string
-	Email      string
-	Name       string
-	Role       string
-	Status     string
-	InvitedBy  pgtype.UUID
-	LastSeenAt pgtype.Timestamptz
-	CreatedAt  pgtype.Timestamptz
-	UpdatedAt  pgtype.Timestamptz
-	Accounts   int32
+	ID              pgtype.UUID
+	Issuer          string
+	Subject         *string
+	Email           string
+	Name            string
+	Role            string
+	Status          string
+	InvitedBy       pgtype.UUID
+	LastSeenAt      pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	ShareProgress   bool
+	ShareProgressAt pgtype.Timestamptz
+	Accounts        int32
 }
 
 // Quem já entrou (ativos e removidos), dono primeiro.
@@ -336,6 +350,8 @@ func (q *Queries) ListMembers(ctx context.Context) ([]ListMembersRow, error) {
 			&i.LastSeenAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ShareProgress,
+			&i.ShareProgressAt,
 			&i.Accounts,
 		); err != nil {
 			return nil, err

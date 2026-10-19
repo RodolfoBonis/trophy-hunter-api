@@ -28,6 +28,11 @@ var allowedStatuses = map[string]bool{
 
 // listGames lista a biblioteca com filtros/ordenação/paginação — GET /games.
 func (h *Handlers) listGames(w http.ResponseWriter, r *http.Request) {
+	h.listGamesFor(w, r, currentUser(r).ID)
+}
+
+// listGamesFor lista a biblioteca de um usuário (o próprio, ou um amigo que compartilha).
+func (h *Handlers) listGamesFor(w http.ResponseWriter, r *http.Request, uid pgtype.UUID) {
 	qp := r.URL.Query()
 
 	var platform *string
@@ -99,7 +104,7 @@ func (h *Handlers) listGames(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	rows, err := h.q.ListGames(ctx, dbgen.ListGamesParams{
-		UserID: currentUser(r).ID, Platform: platform, HasAchievements: hasAch, Q: search, Status: status, IntegrationID: integrationID,
+		UserID: uid, Platform: platform, HasAchievements: hasAch, Q: search, Status: status, IntegrationID: integrationID,
 		Sort: sort, Lim: int32(limit), Off: int32(offset), Almost: h.almostThreshold, //nolint:gosec // valores clampados
 	})
 	if err != nil {
@@ -107,7 +112,7 @@ func (h *Handlers) listGames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	total, err := h.q.CountGames(ctx, dbgen.CountGamesParams{
-		UserID: currentUser(r).ID, Platform: platform, HasAchievements: hasAch, Q: search, Status: status, IntegrationID: integrationID,
+		UserID: uid, Platform: platform, HasAchievements: hasAch, Q: search, Status: status, IntegrationID: integrationID,
 		Almost: h.almostThreshold,
 	})
 	if err != nil {
@@ -121,7 +126,7 @@ func (h *Handlers) listGames(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		keys = append(keys, gameKey(row.Platform, row.ExternalID))
 	}
-	accounts, err := h.gameAccounts(ctx, currentUser(r).ID, keys)
+	accounts, err := h.gameAccounts(ctx, uid, keys)
 	if err != nil {
 		httperr.Write(w, r, httperr.Wrap(httperr.KindInternal, "Internal error", err))
 		return

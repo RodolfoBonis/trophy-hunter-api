@@ -140,6 +140,8 @@ type meDTO struct {
 	Name    string `json:"name"`
 	Role    string `json:"role"`
 	Status  string `json:"status"`
+	// ShareProgress: a pessoa mostra o progresso aos outros membros (e vê o deles) — opt-in.
+	ShareProgress bool `json:"share_progress"`
 }
 
 /* ── Convites ──────────────────────────────────────────────────────────────────────────── */
@@ -255,7 +257,7 @@ func toMeDTO(u dbgen.User) meDTO {
 	if u.Subject != nil {
 		sub = *u.Subject
 	}
-	return meDTO{ID: uuidStr(u.ID), Subject: sub, Email: u.Email, Name: u.Name, Role: u.Role, Status: u.Status}
+	return meDTO{ID: uuidStr(u.ID), Subject: sub, Email: u.Email, Name: u.Name, Role: u.Role, Status: u.Status, ShareProgress: u.ShareProgress}
 }
 
 /* ── Membros ───────────────────────────────────────────────────────────────────────────── */
