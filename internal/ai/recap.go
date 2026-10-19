@@ -140,6 +140,13 @@ func (s *Service) handleRecap(ctx context.Context, p recapPayload) error {
 
 func ptr[T any](v T) *T { return &v }
 
+func platformLabel(p string) string {
+	if p == "psn" {
+		return "PlayStation"
+	}
+	return "Steam"
+}
+
 // recapPrompt junta os números da semana e a fila Próxima Platina (com horas do HLTB e perdíveis).
 func (s *Service) recapPrompt(ctx context.Context, uid pgtype.UUID, since, until time.Time) (string, error) {
 	sinceTS, untilTS := pgtype.Timestamptz{Time: since, Valid: true}, pgtype.Timestamptz{Time: until, Valid: true}
@@ -168,17 +175,21 @@ func (s *Service) recapPrompt(ctx context.Context, uid pgtype.UUID, since, until
 	fmt.Fprintf(&b, "- %d troféus/conquistas (platinas %d, ouro %d, prata %d, bronze %d, conquistas Steam %d); %d raros (< 5%%); %d jogos.\n",
 		tot.Earned, tot.Platinum, tot.Gold, tot.Silver, tot.Bronze, tot.Achievements, tot.Rare, tot.Games)
 	for _, g := range top {
-		fmt.Fprintf(&b, "- Jogou: %s (%s) — %d desbloqueios, agora %d/%d.\n", g.Title, g.Platform, g.Unlocked, g.Earned, g.Total)
+		fmt.Fprintf(&b, "- Jogou: %s [%s] — %d desbloqueios, agora %d/%d.\n", g.Title, platformLabel(g.Platform), g.Unlocked, g.Earned, g.Total)
 	}
 	for _, c := range comps {
-		fmt.Fprintf(&b, "- FECHOU: %s (%s).\n", c.Title, c.Platform)
+		fmt.Fprintf(&b, "- FECHOU: %s [%s].\n", c.Title, platformLabel(c.Platform))
 	}
 	for _, r := range rare {
 		name := r.Name
 		if r.Hidden {
 			name = "(troféu oculto)"
 		}
-		fmt.Fprintf(&b, "- Raro: %s em %s (%.1f%% dos jogadores).\n", name, r.GameTitle, r.RarityPct)
+		label := "Mais raro da semana"
+		if r.RarityPct < 5 {
+			label = "Raro (< 5%)"
+		}
+		fmt.Fprintf(&b, "- %s: %s em %s (%.1f%% dos jogadores).\n", label, name, r.GameTitle, r.RarityPct)
 	}
 	// Fila para as sugestões (mesmo ranking da tela Próxima Platina).
 	rc := make([]ranking.Candidate, 0, len(cands))
@@ -204,11 +215,12 @@ func (s *Service) recapPrompt(ctx context.Context, uid pgtype.UUID, since, until
 		if rk.HoursLeft > 0 {
 			hours = fmt.Sprintf("~%.0f h restantes", rk.HoursLeft)
 		}
-		fmt.Fprintf(&b, "- %s (%s): %d/%d, faltam %d, %s, %d perdíveis, %d online.\n",
-			c.Title, c.Platform, c.Earned, c.Total, c.Remaining, hours, c.RemainingMissable, c.RemainingOnline)
+		fmt.Fprintf(&b, "- %s [%s]: %d/%d, faltam %d, %s, %d perdíveis, %d online.\n",
+			c.Title, platformLabel(c.Platform), c.Earned, c.Total, c.Remaining, hours, c.RemainingMissable, c.RemainingOnline)
 	}
 	b.WriteString("\nEscreva o resumo: headline (1 frase), até 4 destaques curtos da semana (se a semana foi parada, diga com leveza), " +
-		"até 3 sugestões de jogo da fila para a próxima semana com o porquê (horas, perdíveis, quanto falta) — em trophies deixe vazio " +
+		"até 3 sugestões de jogo da fila para a próxima semana com o porquê (horas, perdíveis, quanto falta) — em game só o nome do jogo, " +
+		"sem a plataforma entre colchetes; só chame de raro o que estiver marcado como raro (< 5%); em trophies deixe vazio " +
 		"se não souber nomes de troféus pelos dados — e uma frase final de incentivo.")
 	return b.String(), nil
 }
