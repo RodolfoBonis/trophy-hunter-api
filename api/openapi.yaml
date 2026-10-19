@@ -50,6 +50,24 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/User" }
         "401": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [me]
+      operationId: deleteMe
+      summary: Exclui a sua conta e todos os dados, na hora (também no Keycloak). O dono não pode.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm: { type: string, enum: [EXCLUIR] }
+      responses:
+        "204": { description: Conta excluída }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
 
   /client-errors:
     post:
@@ -98,6 +116,20 @@ paths:
               schema: { $ref: "#/components/schemas/User" }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
+
+  /me/export:
+    get:
+      tags: [me]
+      operationId: exportMe
+      summary: Exporta todos os seus dados (LGPD) em JSON. Sem credenciais. Um a cada 10 min.
+      responses:
+        "200":
+          description: Arquivo JSON (Content-Disposition attachment)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountExport" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
 
   /social/leaderboard:
     get:
@@ -1197,6 +1229,29 @@ components:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
   schemas:
+    AccountExport:
+      type: object
+      required: [format, exported_at, profile, accounts, games, trophies, ai, chats, challenges]
+      properties:
+        format: { type: string, example: trophy-hunter-export/1 }
+        exported_at: { type: string, format: date-time }
+        profile:
+          type: object
+          properties:
+            email: { type: string }
+            name: { type: string }
+            role: { type: string }
+            share_progress: { type: boolean }
+            created_at: { type: [string, "null"], format: date-time }
+            last_seen_at: { type: [string, "null"], format: date-time }
+        accounts: { type: array, items: { type: object, additionalProperties: true } }
+        games: { type: array, items: { type: object, additionalProperties: true } }
+        trophies: { type: array, items: { type: object, additionalProperties: true } }
+        ai: { type: object, additionalProperties: true }
+        chats: { type: array, items: { type: object, additionalProperties: true } }
+        challenges: { type: array, items: { type: object, additionalProperties: true } }
+        notification_preferences: { type: object, additionalProperties: true }
+        push_devices: { type: integer }
     SearchResult:
       type: object
       required: [games, trophies]

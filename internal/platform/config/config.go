@@ -93,6 +93,10 @@ type Auth struct {
 	// OwnerEmail: e-mail (verificado) do dono — reivindica a conta do dono no login, inclusive ao
 	// trocar de IdP. Vazio = ninguém reivindica (o dono não loga).
 	OwnerEmail string `env:"OWNER_EMAIL"`
+	// AdminClientID/Secret: service account do realm (só manage-users) usado para apagar o usuário no
+	// Keycloak quando ele exclui a própria conta. Vazio = não remove no Keycloak (dev/teste).
+	AdminClientID     string `env:"KEYCLOAK_ADMIN_CLIENT_ID"`
+	AdminClientSecret string `env:"KEYCLOAK_ADMIN_CLIENT_SECRET"`
 }
 
 // Crypto configura a chave mestra de criptografia das credenciais (AES-256-GCM).

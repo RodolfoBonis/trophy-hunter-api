@@ -98,6 +98,11 @@ var (
 		Name: "client_errors_total",
 		Help: "Erros reportados pelo app no navegador, por tipo.",
 	}, []string{"kind"})
+
+	accountDeletions = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "account_deletions_total",
+		Help: "Contas excluídas pelo próprio usuário, pelo resultado da remoção no Keycloak (ok|error|skipped).",
+	}, []string{"keycloak"})
 )
 
 func init() {
@@ -106,10 +111,21 @@ func init() {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
-	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed, aiJobs, pushSent, httpRequests, httpDuration, clientErrors)
+	registry.MustRegister(externalAPIRequests, syncRuns, jobsProcessed, aiJobs, pushSent, httpRequests, httpDuration, clientErrors, accountDeletions)
+	for _, k := range AccountDeletionResults {
+		accountDeletions.WithLabelValues(k)
+	}
 	for _, k := range ClientErrorKinds {
 		clientErrors.WithLabelValues(k)
 	}
+}
+
+// AccountDeletionResults são os resultados da remoção no Keycloak; nascem em 0 (mesmo motivo dos client errors).
+var AccountDeletionResults = []string{"ok", "error", "skipped"}
+
+// AccountDeleted registra uma conta excluída pelo próprio usuário (LGPD).
+func AccountDeleted(keycloak string) {
+	accountDeletions.WithLabelValues(keycloak).Inc()
 }
 
 // ClientErrorKinds são os tipos aceitos; todos nascem em 0 para o increase() do primeiro erro contar

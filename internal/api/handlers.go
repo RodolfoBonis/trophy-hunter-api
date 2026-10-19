@@ -37,6 +37,8 @@ type Handlers struct {
 	clientErrors    *clientErrorLimiter
 	challenges      *challenges.Service
 	queue           queue.Queue
+	idp             userDeleter
+	exports         *cooldown
 }
 
 // HandlerDeps injeta as dependências dos handlers.
@@ -58,6 +60,8 @@ type HandlerDeps struct {
 	AuthReady func() bool
 	// Queue: fila de jobs (push dos desafios). nil = desafios sem aviso.
 	Queue queue.Queue
+	// IDP apaga a pessoa no Keycloak quando ela exclui a conta. nil = só apaga no app.
+	IDP userDeleter
 }
 
 // NewHandlers constrói os handlers.
@@ -78,6 +82,8 @@ func NewHandlers(d HandlerDeps) *Handlers {
 		clientErrors:    newClientErrorLimiter(clientErrorPerMinute),
 		challenges:      challenges.New(d.Queries, d.Queue, d.Logger),
 		queue:           d.Queue,
+		idp:             d.IDP,
+		exports:         newCooldown(exportCooldown),
 		q:               d.Queries,
 		pool:            d.Pool,
 		syncer:          d.Syncer,

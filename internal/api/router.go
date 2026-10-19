@@ -95,6 +95,9 @@ func NewRouter(d RouterDeps) http.Handler {
 
 			// Social (opt-in e recíproco — ver handlers_social.go).
 			r.Put("/me/sharing", h.putSharing)
+			// Seus dados (LGPD).
+			r.Get("/me/export", h.exportMe)
+			r.Delete("/me", h.deleteMe)
 			r.Get("/games/{id}/friends", h.getGameFriends)
 			r.Get("/games/{id}/compare/{friendId}", h.compareGame)
 			r.Route("/social", func(r chi.Router) {

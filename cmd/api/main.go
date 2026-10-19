@@ -14,6 +14,7 @@ import (
 	migrations "github.com/RodolfoBonis/trophy-hunter-api/db/migrations"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/api"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/keycloak"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/psn"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steam"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/auth"
@@ -100,11 +101,16 @@ func run() error {
 		aiSvc = ai.New(ai.Deps{Queries: queries, Queue: jobs, Redis: rdb, DailyLimit: cfg.AI.DailyLimit, Logger: logger})
 	}
 
+	idp, err := keycloak.New(cfg.Auth.Issuer, cfg.Auth.AdminClientID, cfg.Auth.AdminClientSecret, nil)
+	if err != nil {
+		return err
+	}
 	handlers := api.NewHandlers(api.HandlerDeps{
 		Queries: queries, Pool: pool, Syncer: syncer, Logger: logger, Queue: jobs,
 		AI: aiSvc, Redis: rdb, OwnerEmail: cfg.Auth.OwnerEmail, AppURL: cfg.HTTP.AppURL,
 		Push:      push.New(queries, push.Config{PublicKey: cfg.Push.VAPIDPublicKey, PrivateKey: cfg.Push.VAPIDPrivateKey, Subject: cfg.Push.VAPIDSubject}, nil, logger),
 		AuthReady: authenticator.Ready,
+		IDP:       idp,
 	})
 	router := api.NewRouter(api.RouterDeps{
 		Handlers: handlers, Auth: authenticator, Logger: logger,

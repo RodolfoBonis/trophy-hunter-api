@@ -298,9 +298,11 @@ func (h *Handlers) removeMember(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, r, httperr.New(httperr.KindBadRequest, "Bad request", "id inválido"))
 		return
 	}
-	var n int64
+	var n int64 = 1
 	if r.URL.Query().Get("purge") == "true" {
-		n, err = h.q.DeleteMember(r.Context(), id)
+		if err = h.purgeUser(r.Context(), id); errors.Is(err, errNotDeletable) {
+			n, err = 0, nil
+		}
 	} else {
 		n, err = h.q.RemoveMember(r.Context(), id)
 	}

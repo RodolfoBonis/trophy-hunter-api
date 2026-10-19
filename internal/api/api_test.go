@@ -93,6 +93,7 @@ func setupFull(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI
 type buildOpts struct {
 	steamServerKey string
 	aiDailyLimit   int
+	idp            *fakeIDP
 }
 
 func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, runner ai.Runner, opts ...func(*buildOpts)) *testEnv {
@@ -124,6 +125,9 @@ func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, ru
 	authn := auth.New(context.Background(), config.Auth{Mode: config.AuthModeDev, RequiredRole: "trophy-hunter-user"}, logger)
 
 	deps := api.HandlerDeps{Queries: q, Pool: pool, Syncer: syncer, Logger: logger, Push: notifier, Queue: jobs, OwnerEmail: ownerEmail, AppURL: "https://trophy.test"}
+	if o.idp != nil {
+		deps.IDP = o.idp
+	}
 	var aiSvc *ai.Service
 	if runner != nil {
 		rdb := testsupport.NewRedis(t)
