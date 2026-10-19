@@ -8,6 +8,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/badges"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/challenges"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/push"
@@ -39,6 +40,7 @@ type Handlers struct {
 	queue           queue.Queue
 	idp             userDeleter
 	exports         *cooldown
+	badges          *badges.Service
 }
 
 // HandlerDeps injeta as dependências dos handlers.
@@ -84,6 +86,7 @@ func NewHandlers(d HandlerDeps) *Handlers {
 		queue:           d.Queue,
 		idp:             d.IDP,
 		exports:         newCooldown(exportCooldown),
+		badges:          badges.New(d.Queries, d.Queue, d.Logger),
 		q:               d.Queries,
 		pool:            d.Pool,
 		syncer:          d.Syncer,

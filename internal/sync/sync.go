@@ -29,6 +29,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/badges"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/challenges"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steam"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/crypto"
@@ -127,6 +128,7 @@ type Syncer struct {
 	steamServerKey string
 	logger         *slog.Logger
 	challenges     *challenges.Service
+	badges         *badges.Service
 }
 
 // Deps injeta as dependências do Syncer.
@@ -145,6 +147,8 @@ type Deps struct {
 	Logger         *slog.Logger
 	// Challenges reavalia os desafios ao fim de cada sync (nil = não avalia aqui).
 	Challenges *challenges.Service
+	// Badges grava/avisa medalhas novas de quem sincronizou (nil = não avalia aqui).
+	Badges *badges.Service
 }
 
 // New constrói o Syncer.
@@ -160,6 +164,7 @@ func New(d Deps) *Syncer {
 		steamServerKey: d.SteamServerKey,
 		logger:         d.Logger,
 		challenges:     d.Challenges,
+		badges:         d.Badges,
 	}
 }
 

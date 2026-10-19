@@ -118,7 +118,8 @@ SELECT u.id, u.name,
        (SELECT COUNT(*) FROM best_games c
          WHERE c.user_id = u.id AND c.total > 0 AND c.earned = c.total
            AND ($1::timestamptz IS NULL OR c.last_unlock_at >= $1::timestamptz))::int AS completed,
-       MAX(t.earned_at)::timestamptz                                                           AS last_unlock_at
+       MAX(t.earned_at)::timestamptz                                                           AS last_unlock_at,
+       (SELECT COUNT(*) FROM user_badges ub WHERE ub.user_id = u.id)::int                      AS badges
 FROM users u
 LEFT JOIN best_games b ON b.user_id = u.id
 LEFT JOIN trophies t ON t.game_id = b.id AND t.earned
@@ -137,6 +138,7 @@ type LeaderboardRow struct {
 	PsnPoints    int32
 	Completed    int32
 	LastUnlockAt pgtype.Timestamptz
+	Badges       int32
 }
 
 // Placar dos membros que compartilham. Jogos contam uma vez (best_games = conta mais avançada).
@@ -160,6 +162,7 @@ func (q *Queries) Leaderboard(ctx context.Context, since pgtype.Timestamptz) ([]
 			&i.PsnPoints,
 			&i.Completed,
 			&i.LastUnlockAt,
+			&i.Badges,
 		); err != nil {
 			return nil, err
 		}

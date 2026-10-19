@@ -97,6 +97,7 @@ func NewRouter(d RouterDeps) http.Handler {
 			r.Put("/me/sharing", h.putSharing)
 			// Seus dados (LGPD).
 			r.Get("/me/export", h.exportMe)
+			r.Get("/me/badges", h.getMyBadges)
 			r.Delete("/me", h.deleteMe)
 			r.Get("/games/{id}/friends", h.getGameFriends)
 			r.Get("/games/{id}/compare/{friendId}", h.compareGame)
@@ -106,6 +107,7 @@ func NewRouter(d RouterDeps) http.Handler {
 				r.Get("/feed", h.getFeed)
 				r.Get("/friends/{id}", h.getFriend)
 				r.Get("/friends/{id}/games", h.listFriendGames)
+				r.Get("/friends/{id}/badges", h.getFriendBadges)
 				r.Get("/challenges", h.listChallenges)
 				r.Post("/challenges", h.createChallenge)
 				r.Get("/challenges/{id}", h.getChallenge)

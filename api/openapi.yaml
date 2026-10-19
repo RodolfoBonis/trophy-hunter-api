@@ -69,6 +69,18 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
 
+  /me/badges:
+    get:
+      tags: [me]
+      operationId: getMyBadges
+      summary: Medalhas do app — ganhas, as próximas, catálogo com andamento e a temporada do mês.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MyBadges" }
+
   /client-errors:
     post:
       tags: [me]
@@ -214,6 +226,26 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GameListPage" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /social/friends/{id}/badges:
+    get:
+      tags: [social]
+      operationId: getFriendBadges
+      summary: Medalhas ganhas de um amigo (só entre quem compartilha; outro caso 403/404).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [earned]
+                properties:
+                  earned: { type: array, items: { $ref: "#/components/schemas/Badge" } }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
@@ -1266,6 +1298,37 @@ components:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
   schemas:
+    Badge:
+      type: object
+      required: [key, name, description, tier, value, goal, earned]
+      properties:
+        key: { type: string }
+        name: { type: string }
+        description: { type: string }
+        tier: { type: string, enum: [bronze, silver, gold, platinum] }
+        season: { type: string, description: "YYYY-MM nas medalhas de temporada" }
+        earned_at: { type: string, format: date-time }
+        value: { type: integer }
+        goal: { type: integer }
+        earned: { type: boolean }
+    MyBadges:
+      type: object
+      required: [earned, next, catalog, season]
+      properties:
+        earned: { type: array, items: { $ref: "#/components/schemas/Badge" } }
+        next: { type: array, items: { $ref: "#/components/schemas/Badge" } }
+        catalog: { type: array, items: { $ref: "#/components/schemas/Badge" } }
+        season:
+          type: object
+          required: [key, label, platinums, rare, platinum_goal, rare_goal, done]
+          properties:
+            key: { type: string }
+            label: { type: string }
+            platinums: { type: integer }
+            rare: { type: integer }
+            platinum_goal: { type: integer }
+            rare_goal: { type: integer }
+            done: { type: boolean }
     Hunt:
       type: object
       required: [roadmap, syncing, missables_overview, stages]
@@ -1705,7 +1768,7 @@ components:
         is_me: { type: boolean }
     LeaderboardItem:
       type: object
-      required: [user, platinum, earned, rare, psn_points, completed, last_unlock_at]
+      required: [user, platinum, earned, rare, psn_points, completed, last_unlock_at, badges]
       properties:
         user: { $ref: "#/components/schemas/SocialUser" }
         platinum: { type: integer }
@@ -1714,6 +1777,7 @@ components:
         psn_points: { type: integer, description: "Pontos PSN (15/30/90/300) no período." }
         completed: { type: integer, description: Jogos fechados (platina/100%) no período. }
         last_unlock_at: { type: [string, "null"], format: date-time }
+        badges: { type: integer, description: "Medalhas do app ganhas" }
     Leaderboard:
       type: object
       required: [period, items]

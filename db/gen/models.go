@@ -345,3 +345,10 @@ type User struct {
 	ShareProgress   bool
 	ShareProgressAt pgtype.Timestamptz
 }
+
+type UserBadge struct {
+	UserID   pgtype.UUID
+	BadgeKey string
+	Season   string
+	EarnedAt pgtype.Timestamptz
+}

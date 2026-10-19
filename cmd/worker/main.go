@@ -16,6 +16,7 @@ import (
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
 	migrations "github.com/RodolfoBonis/trophy-hunter-api/db/migrations"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/badges"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/challenges"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/hltb"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/psn"
@@ -100,8 +101,10 @@ func run() error {
 		logger.Warn("web push desligado: VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY ausentes")
 	}
 	challengeSvc := challenges.New(queries, jobs, logger)
+	badgeSvc := badges.New(queries, jobs, logger)
 	syncer := syncpkg.New(syncpkg.Deps{
 		Challenges: challengeSvc,
+		Badges:     badgeSvc,
 		Queries:    queries, Pool: pool, Queue: jobs, Cipher: cipher,
 		SteamFactory: steamFactory, Logger: logger, Notifier: notifier, SteamServerKey: cfg.Steam.ServerAPIKey,
 		PSN: psn.New(psn.Options{AuthBaseURL: cfg.PSN.AuthBaseURL, APIBaseURL: cfg.PSN.APIBaseURL, Lang: cfg.PSN.Lang, RPS: cfg.PSN.RPS, Burst: cfg.PSN.Burst, Logger: logger}),

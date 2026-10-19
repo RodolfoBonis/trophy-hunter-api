@@ -468,6 +468,13 @@ func (s *Syncer) onRunClose(ctx context.Context, integID pgtype.UUID, scope stri
 	if s.challenges != nil {
 		s.challenges.EvaluateAll(ctx) // alguém pode ter fechado o jogo de um desafio neste sync
 	}
+	if s.badges != nil {
+		if integ, err := s.q.GetIntegration(ctx, integID); err == nil {
+			if _, err := s.badges.Sync(ctx, integ.UserID, true); err != nil {
+				s.logger.Warn("medalhas: avaliar após sync falhou", slog.String("err", err.Error()))
+			}
+		}
+	}
 	if gamesFailed == 0 {
 		metrics.SyncRun(scope, "ok")
 		if err := s.q.MarkIntegrationSynced(ctx, dbgen.MarkIntegrationSyncedParams{

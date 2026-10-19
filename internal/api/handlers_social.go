@@ -89,6 +89,7 @@ type leaderboardItemDTO struct {
 	PsnPoints    int           `json:"psn_points"`
 	Completed    int           `json:"completed"`
 	LastUnlockAt *time.Time    `json:"last_unlock_at"`
+	Badges       int           `json:"badges"`
 }
 
 type leaderboardDTO struct {
@@ -129,7 +130,7 @@ func (h *Handlers) getLeaderboard(w http.ResponseWriter, r *http.Request) {
 	for _, x := range rows {
 		out.Items = append(out.Items, leaderboardItemDTO{
 			User: h.socialUser(r, x.ID, x.Name), Platinum: int(x.Platinum), Earned: int(x.Earned), Rare: int(x.Rare),
-			PsnPoints: int(x.PsnPoints), Completed: int(x.Completed), LastUnlockAt: tptr(x.LastUnlockAt),
+			PsnPoints: int(x.PsnPoints), Completed: int(x.Completed), LastUnlockAt: tptr(x.LastUnlockAt), Badges: int(x.Badges),
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
