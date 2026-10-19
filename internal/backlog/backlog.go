@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -149,7 +150,10 @@ func (s *Service) Add(ctx context.Context, userID pgtype.UUID, platform, storeID
 	if err != nil {
 		return pgtype.UUID{}, err
 	}
-	if err := s.refreshOne(ctx, platform, storeID, title); err != nil {
+	// O preço inicial não depende da tela: fechar/recarregar não cancela a busca nem o registro do erro.
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	defer cancel()
+	if err := s.refreshOne(pctx, platform, storeID, title); err != nil {
 		s.logger.Warn("backlog: preço inicial falhou", slog.String("platform", platform), slog.String("err", err.Error()))
 	}
 	return id, nil
