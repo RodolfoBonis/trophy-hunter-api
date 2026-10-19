@@ -125,6 +125,13 @@ func NewRouter(d RouterDeps) http.Handler {
 			r.Post("/integrations/{id}/sync", h.syncIntegration)
 
 			r.Get("/search", h.search)
+
+			// Backlog ("quero platinar"): lojas + lista de desejos com preço.
+			r.Get("/catalog/search", h.searchCatalog)
+			r.Get("/wishlist", h.listWishlist)
+			r.Post("/wishlist", h.addWishlist)
+			r.Patch("/wishlist/{id}", h.patchWishlist)
+			r.Delete("/wishlist/{id}", h.deleteWishlist)
 			r.Get("/games", h.listGames)
 			r.Get("/games/{id}", h.getGame)
 			r.Post("/games/{id}/sync", h.syncGame)

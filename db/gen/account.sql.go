@@ -36,6 +36,9 @@ SELECT jsonb_build_object(
     ) ORDER BY h.done_at), '[]') FROM hunt_progress h WHERE h.user_id = $1),
     'badges', (SELECT coalesce(jsonb_agg(jsonb_build_object('badge', b.badge_key, 'season', b.season, 'earned_at', b.earned_at)
         ORDER BY b.earned_at), '[]') FROM user_badges b WHERE b.user_id = $1),
+    'wishlist', (SELECT coalesce(jsonb_agg(jsonb_build_object(
+        'platform', w.platform, 'store_id', w.store_id, 'title', w.title, 'target_price_cents', w.target_price_cents, 'added_at', w.added_at
+    ) ORDER BY w.added_at), '[]') FROM wishlist w WHERE w.user_id = $1),
     'weekly_recaps', (SELECT coalesce(jsonb_agg(jsonb_build_object('week', r.week, 'content', r.content) ORDER BY r.week), '[]')
         FROM ai_recaps r WHERE r.user_id = $1 AND r.status = 'ready')
 )::jsonb AS data

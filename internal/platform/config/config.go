@@ -41,6 +41,7 @@ type Config struct {
 	AI                AI
 	Push              Push
 	HLTB              HLTB
+	Prices            Prices
 	WorkerConcurrency int `env:"WORKER_CONCURRENCY" envDefault:"4"`
 }
 
@@ -167,6 +168,16 @@ type HLTB struct {
 	BaseURL  string        `env:"HLTB_BASE_URL" envDefault:"https://howlongtobeat.com"`
 	Interval time.Duration `env:"HLTB_INTERVAL" envDefault:"10m"`
 	Batch    int           `env:"HLTB_BATCH" envDefault:"15"`
+}
+
+// Prices configura o backlog (preços nas lojas). ITAD_API_KEY é opcional: sem ela, Steam usa o
+// preço da própria loja (sem menor histórico). PSSTORE_SEARCH_HASH vazio = hash conhecido (psstore).
+type Prices struct {
+	Enabled     bool          `env:"PRICES_ENABLED" envDefault:"true"`
+	Interval    time.Duration `env:"PRICES_INTERVAL" envDefault:"15m"`
+	Batch       int           `env:"PRICES_BATCH" envDefault:"10"`
+	ITADKey     string        `env:"ITAD_API_KEY"`
+	PSStoreHash string        `env:"PSSTORE_SEARCH_HASH"`
 }
 
 // Option ajusta o carregamento.

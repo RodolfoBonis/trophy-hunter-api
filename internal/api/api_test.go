@@ -18,6 +18,7 @@ import (
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/api"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/backlog"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steam"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/auth"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/config"
@@ -94,6 +95,7 @@ type buildOpts struct {
 	steamServerKey string
 	aiDailyLimit   int
 	idp            *fakeIDP
+	stores         *fakeStores
 }
 
 func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, runner ai.Runner, opts ...func(*buildOpts)) *testEnv {
@@ -127,6 +129,9 @@ func build(t *testing.T, factory syncpkg.SteamFactory, psnAPI syncpkg.PSNAPI, ru
 	deps := api.HandlerDeps{Queries: q, Pool: pool, Syncer: syncer, Logger: logger, Push: notifier, Queue: jobs, OwnerEmail: ownerEmail, AppURL: "https://trophy.test"}
 	if o.idp != nil {
 		deps.IDP = o.idp
+	}
+	if o.stores != nil {
+		deps.Backlog = backlog.New(q, o.stores, o.stores.ps(), o.stores.itad(), jobs, logger)
 	}
 	var aiSvc *ai.Service
 	if runner != nil {

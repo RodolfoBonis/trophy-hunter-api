@@ -16,11 +16,15 @@ import (
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
 	migrations "github.com/RodolfoBonis/trophy-hunter-api/db/migrations"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/backlog"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/badges"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/challenges"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/hltb"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/itad"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/psn"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/psstore"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steam"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steamstore"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/config"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/crypto"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/db"
@@ -172,6 +176,28 @@ func run() error {
 		go func() {
 			defer wg.Done()
 			estimator.Run(ctx)
+		}()
+	}
+
+	// Backlog: preços da lista de desejos (Steam/ITAD/PS Store) e aviso de promoção.
+	if cfg.Prices.Enabled {
+		prices := backlog.New(queries, steamstore.New("", nil), psstore.New("", cfg.Prices.PSStoreHash, nil),
+			itad.New("", cfg.Prices.ITADKey, nil), jobs, logger)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t := time.NewTicker(cfg.Prices.Interval)
+			defer t.Stop()
+			for {
+				if err := prices.RefreshPrices(ctx, cfg.Prices.Batch); err != nil && ctx.Err() == nil {
+					logger.Warn("backlog: rodada de preços falhou", slog.String("err", err.Error()))
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				}
+			}
 		}()
 	}
 

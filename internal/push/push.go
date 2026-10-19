@@ -43,6 +43,7 @@ const (
 	KindChallenges  Kind = "challenges"   // desafios entre amigos: convite, avanço e resultado
 	KindWeeklyRecap Kind = "weekly_recap" // resumo semanal da IA (opt-in)
 	KindBadges      Kind = "badges"       // medalha/temporada nova do app
+	KindDeals       Kind = "deals"        // jogo da lista de desejos em promoção
 	KindTest        Kind = "test"         // botão "Enviar teste" (ignora preferências)
 )
 
@@ -340,11 +341,12 @@ type Preferences struct {
 	// WeeklyRecap liga o resumo semanal da IA (gera E avisa) — opt-in, começa desligado.
 	WeeklyRecap bool `json:"weekly_recap"`
 	Badges      bool `json:"badges"`
+	Deals       bool `json:"deals"`
 }
 
 // DefaultPreferences devolve tudo ligado.
 func DefaultPreferences() Preferences {
-	return Preferences{Unlocks: true, Completions: true, Reconnect: true, AIReady: true, Challenges: true, Badges: true}
+	return Preferences{Unlocks: true, Completions: true, Reconnect: true, AIReady: true, Challenges: true, Badges: true, Deals: true}
 }
 
 // Allows indica se o tipo está ligado.
@@ -362,6 +364,8 @@ func (p Preferences) Allows(k Kind) bool {
 		return p.Challenges
 	case KindBadges:
 		return p.Badges
+	case KindDeals:
+		return p.Deals
 	case KindWeeklyRecap:
 		return p.WeeklyRecap
 	default:

@@ -8,6 +8,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/backlog"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/badges"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/challenges"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/queue"
@@ -41,6 +42,7 @@ type Handlers struct {
 	idp             userDeleter
 	exports         *cooldown
 	badges          *badges.Service
+	backlog         *backlog.Service
 }
 
 // HandlerDeps injeta as dependências dos handlers.
@@ -64,6 +66,8 @@ type HandlerDeps struct {
 	Queue queue.Queue
 	// IDP apaga a pessoa no Keycloak quando ela exclui a conta. nil = só apaga no app.
 	IDP userDeleter
+	// Backlog: busca nas lojas e lista de desejos com preço. nil = desligado (501).
+	Backlog *backlog.Service
 }
 
 // NewHandlers constrói os handlers.
@@ -85,6 +89,7 @@ func NewHandlers(d HandlerDeps) *Handlers {
 		challenges:      challenges.New(d.Queries, d.Queue, d.Logger),
 		queue:           d.Queue,
 		idp:             d.IDP,
+		backlog:         d.Backlog,
 		exports:         newCooldown(exportCooldown),
 		badges:          badges.New(d.Queries, d.Queue, d.Logger),
 		q:               d.Queries,

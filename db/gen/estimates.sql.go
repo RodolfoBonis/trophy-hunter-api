@@ -31,15 +31,21 @@ func (q *Queries) GetEstimate(ctx context.Context, normalizedTitle string) (Game
 
 const titlesNeedingEstimate = `-- name: TitlesNeedingEstimate :many
 
-SELECT g.normalized_title, MIN(g.title)::text AS title
-FROM games g
-LEFT JOIN game_estimates e ON e.normalized_title = g.normalized_title
-WHERE g.has_achievements AND g.normalized_title <> ''
-  AND (e.normalized_title IS NULL
-       OR (e.status = 'found' AND e.fetched_at < now() - interval '30 days')
-       OR (e.status = 'not_found' AND e.fetched_at < now() - interval '7 days'))
-GROUP BY g.normalized_title, e.normalized_title
-ORDER BY (e.normalized_title IS NULL) DESC, MAX(g.last_played_at) DESC NULLS LAST
+WITH titles AS (
+    SELECT g.normalized_title, g.title, g.last_played_at AS recent
+    FROM games g WHERE g.has_achievements AND g.normalized_title <> ''
+    UNION ALL
+    SELECT w.normalized_title, w.title, w.added_at AS recent
+    FROM wishlist w WHERE w.normalized_title <> ''
+)
+SELECT t.normalized_title, MIN(t.title)::text AS title
+FROM titles t
+LEFT JOIN game_estimates e ON e.normalized_title = t.normalized_title
+WHERE e.normalized_title IS NULL
+   OR (e.status = 'found' AND e.fetched_at < now() - interval '30 days')
+   OR (e.status = 'not_found' AND e.fetched_at < now() - interval '7 days')
+GROUP BY t.normalized_title, e.normalized_title
+ORDER BY (e.normalized_title IS NULL) DESC, MAX(t.recent) DESC NULLS LAST
 LIMIT $1
 `
 
@@ -49,8 +55,8 @@ type TitlesNeedingEstimateRow struct {
 }
 
 // Estimativas de tempo (HowLongToBeat), por título normalizado.
-// Títulos com conquistas sem estimativa, ou vencida (achou: 30 dias; não achou: 7 dias). Os sem nenhuma
-// tentativa e os jogados mais recentemente primeiro.
+// Títulos sem estimativa, ou vencida (achou: 30 dias; não achou: 7 dias): jogos com conquistas e os
+// da lista de desejos (backlog). Os sem nenhuma tentativa e os mais recentes primeiro.
 func (q *Queries) TitlesNeedingEstimate(ctx context.Context, lim int32) ([]TitlesNeedingEstimateRow, error) {
 	rows, err := q.db.Query(ctx, titlesNeedingEstimate, lim)
 	if err != nil {

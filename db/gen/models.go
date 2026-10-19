@@ -161,6 +161,20 @@ type GameEstimate struct {
 	FetchedAt       pgtype.Timestamptz
 }
 
+type GamePrice struct {
+	Platform     string
+	StoreID      string
+	Status       string
+	Currency     string
+	PriceCents   *int32
+	RegularCents *int32
+	Cut          int32
+	LowCents     *int32
+	Shop         string
+	Url          string
+	FetchedAt    pgtype.Timestamptz
+}
+
 type GameProgress struct {
 	ID              pgtype.UUID
 	UserID          pgtype.UUID
@@ -351,4 +365,17 @@ type UserBadge struct {
 	BadgeKey string
 	Season   string
 	EarnedAt pgtype.Timestamptz
+}
+
+type Wishlist struct {
+	ID                 pgtype.UUID
+	UserID             pgtype.UUID
+	Platform           string
+	StoreID            string
+	Title              string
+	NormalizedTitle    string
+	Cover              string
+	TargetPriceCents   *int32
+	NotifiedPriceCents *int32
+	AddedAt            pgtype.Timestamptz
 }

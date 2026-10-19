@@ -14,9 +14,13 @@ import (
 	migrations "github.com/RodolfoBonis/trophy-hunter-api/db/migrations"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/ai"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/api"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/backlog"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/itad"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/keycloak"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/psn"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/psstore"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steam"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steamstore"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/auth"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/config"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/crypto"
@@ -101,6 +105,11 @@ func run() error {
 		aiSvc = ai.New(ai.Deps{Queries: queries, Queue: jobs, Redis: rdb, DailyLimit: cfg.AI.DailyLimit, Logger: logger})
 	}
 
+	var backlogSvc *backlog.Service
+	if cfg.Prices.Enabled {
+		backlogSvc = backlog.New(queries, steamstore.New("", nil), psstore.New("", cfg.Prices.PSStoreHash, nil),
+			itad.New("", cfg.Prices.ITADKey, nil), jobs, logger)
+	}
 	idp, err := keycloak.New(cfg.Auth.Issuer, cfg.Auth.AdminClientID, cfg.Auth.AdminClientSecret, nil)
 	if err != nil {
 		return err
@@ -111,6 +120,7 @@ func run() error {
 		Push:      push.New(queries, push.Config{PublicKey: cfg.Push.VAPIDPublicKey, PrivateKey: cfg.Push.VAPIDPrivateKey, Subject: cfg.Push.VAPIDSubject}, nil, logger),
 		AuthReady: authenticator.Ready,
 		IDP:       idp,
+		Backlog:   backlogSvc,
 	})
 	router := api.NewRouter(api.RouterDeps{
 		Handlers: handlers, Auth: authenticator, Logger: logger,

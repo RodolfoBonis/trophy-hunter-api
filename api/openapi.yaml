@@ -850,6 +850,103 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
+  /catalog/search:
+    get:
+      tags: [backlog]
+      operationId: searchCatalog
+      summary: Busca jogos nas lojas (Steam e PS Store do Brasil) com preço e se você já tem.
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2, maxLength: 100 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, unavailable]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [platform, store_id, title, cover, price_cents, regular_cents, cut, owned]
+                      properties:
+                        platform: { type: string, enum: [steam, psn] }
+                        store_id: { type: string }
+                        title: { type: string }
+                        cover: { type: string }
+                        price_cents: { type: [integer, "null"] }
+                        regular_cents: { type: [integer, "null"] }
+                        cut: { type: integer }
+                        owned: { type: boolean }
+                  unavailable: { type: array, items: { type: string, enum: [steam, psn] } }
+        "400": { $ref: "#/components/responses/Problem" }
+
+  /wishlist:
+    get:
+      tags: [backlog]
+      operationId: listWishlist
+      summary: Lista de desejos com preço atual, menor histórico e horas para platinar.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/WishlistItem" } }
+    post:
+      tags: [backlog]
+      operationId: addWishlist
+      summary: Adiciona um jogo da loja (já busca o preço).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [platform, store_id, title]
+              properties:
+                platform: { type: string, enum: [steam, psn] }
+                store_id: { type: string }
+                title: { type: string }
+                cover: { type: string }
+                target_price_cents: { type: [integer, "null"], minimum: 0 }
+      responses:
+        "201": { description: Criado }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /wishlist/{id}:
+    patch:
+      tags: [backlog]
+      operationId: patchWishlist
+      summary: Define (ou tira, com null) o preço-alvo do aviso de promoção.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                target_price_cents: { type: [integer, "null"], minimum: 0 }
+      responses:
+        "204": { description: OK }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [backlog]
+      operationId: deleteWishlist
+      summary: Tira o jogo da lista de desejos.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Removido }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /games/{id}/hunt:
     get:
       tags: [ai]
@@ -1298,6 +1395,27 @@ components:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
   schemas:
+    WishlistItem:
+      type: object
+      required: [id, platform, store_id, title, cover, target_price_cents, price_status, price_cents, regular_cents, cut, low_cents, shop, url, completionist_h, main_h]
+      properties:
+        id: { type: string, format: uuid }
+        platform: { type: string, enum: [steam, psn] }
+        store_id: { type: string }
+        title: { type: string }
+        cover: { type: string }
+        target_price_cents: { type: [integer, "null"] }
+        added_at: { type: [string, "null"], format: date-time }
+        price_status: { type: string, enum: [none, ok, not_found, error] }
+        price_cents: { type: [integer, "null"] }
+        regular_cents: { type: [integer, "null"] }
+        cut: { type: integer }
+        low_cents: { type: [integer, "null"], description: "Menor preço histórico (ITAD, só PC)" }
+        shop: { type: string }
+        url: { type: string }
+        price_fetched_at: { type: [string, "null"], format: date-time }
+        completionist_h: { type: [number, "null"] }
+        main_h: { type: [number, "null"] }
     Badge:
       type: object
       required: [key, name, description, tier, value, goal, earned]
