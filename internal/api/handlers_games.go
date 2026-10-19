@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -226,7 +227,14 @@ func (h *Handlers) getGame(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	estimate, err := h.estimateFor(ctx, game.NormalizedTitle, summary.CompletionPct, summary.Remaining == 0)
+	if err != nil {
+		writeInternal(w, r, err)
+		return
+	}
+
 	writeJSON(w, http.StatusOK, gameDetailDTO{
+		Estimate:      estimate,
 		gameDTO:       toGameDTO(game),
 		IntegrationID: uuidStr(integ.ID),
 		AccountLabel:  integ.Label,
@@ -236,6 +244,35 @@ func (h *Handlers) getGame(w http.ResponseWriter, r *http.Request) {
 		CrossPlatform: cross,
 		UnifyLocked:   game.UnifyLocked,
 	})
+}
+
+// estimateFor monta a estimativa do HLTB (nil se não houver). Jogo fechado não tem "horas restantes".
+func (h *Handlers) estimateFor(ctx context.Context, normalizedTitle string, completion float64, done bool) (*estimateDTO, error) {
+	if normalizedTitle == "" {
+		return nil, nil
+	}
+	e, err := h.q.GetEstimate(ctx, normalizedTitle)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	hrs := func(v *float32) *float64 {
+		if v == nil || *v <= 0 {
+			return nil
+		}
+		f := math.Round(float64(*v)*10) / 10
+		return &f
+	}
+	out := &estimateDTO{MainH: hrs(e.MainH), ExtraH: hrs(e.ExtraH), CompletionistH: hrs(e.CompletionistH)}
+	if e.HltbID != nil {
+		out.SourceURL = "https://howlongtobeat.com/game/" + strconv.FormatInt(*e.HltbID, 10)
+	}
+	if out.CompletionistH != nil && !done {
+		out.HoursLeft = positive(hoursLeft(*out.CompletionistH, completion))
+	}
+	return out, nil
 }
 
 func atoiDefault(s string, def int) int {

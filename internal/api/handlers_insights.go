@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
@@ -179,24 +180,27 @@ type remainingTrophyDTO struct {
 }
 
 type nextItemDTO struct {
-	GameID             string          `json:"game_id"`
-	Title              string          `json:"title"`
-	Platform           string          `json:"platform"`
-	ExternalID         string          `json:"external_id"`
-	Cover              string          `json:"cover"`
-	Hero               string          `json:"hero"`
-	Earned             int             `json:"earned"`
-	Total              int             `json:"total"`
-	Remaining          int             `json:"remaining"`
-	CompletionPct      float64         `json:"completion_pct"`
-	AvgRemainingRarity float64         `json:"avg_remaining_rarity"`
-	MinRemainingRarity float64         `json:"min_remaining_rarity"`
-	RemainingMissable  int             `json:"remaining_missable"`
-	RemainingOnline    int             `json:"remaining_online"`
-	Priority           int             `json:"priority"`
-	LastUnlockAt       *time.Time      `json:"last_unlock_at"`
-	Score              float64         `json:"score"`
-	Factors            ranking.Factors `json:"factors"`
+	GameID             string     `json:"game_id"`
+	Title              string     `json:"title"`
+	Platform           string     `json:"platform"`
+	ExternalID         string     `json:"external_id"`
+	Cover              string     `json:"cover"`
+	Hero               string     `json:"hero"`
+	Earned             int        `json:"earned"`
+	Total              int        `json:"total"`
+	Remaining          int        `json:"remaining"`
+	CompletionPct      float64    `json:"completion_pct"`
+	AvgRemainingRarity float64    `json:"avg_remaining_rarity"`
+	MinRemainingRarity float64    `json:"min_remaining_rarity"`
+	RemainingMissable  int        `json:"remaining_missable"`
+	RemainingOnline    int        `json:"remaining_online"`
+	Priority           int        `json:"priority"`
+	LastUnlockAt       *time.Time `json:"last_unlock_at"`
+	// HoursTotal/HoursLeft: HowLongToBeat (100%) e o que falta proporcional ao progresso; null = sem dado.
+	HoursTotal *float64        `json:"hours_total"`
+	HoursLeft  *float64        `json:"hours_left"`
+	Score      float64         `json:"score"`
+	Factors    ranking.Factors `json:"factors"`
 }
 
 type nextDTO struct {
@@ -227,6 +231,7 @@ func (h *Handlers) getNext(w http.ResponseWriter, r *http.Request) {
 			ID: id, Completion: row.CompletionPct, Remaining: int(row.Remaining),
 			AvgRemainingRarity: row.AvgRemainingRarity, Priority: int(row.Priority),
 			RemainingMissable: int(row.RemainingMissable), RemainingOnline: int(row.RemainingOnline),
+			HoursLeft: hoursLeft(row.CompletionistH, row.CompletionPct),
 		})
 	}
 	ranked := ranking.Rank(cands)
@@ -244,6 +249,7 @@ func (h *Handlers) getNext(w http.ResponseWriter, r *http.Request) {
 			AvgRemainingRarity: row.AvgRemainingRarity, MinRemainingRarity: row.MinRemainingRarity,
 			RemainingMissable: int(row.RemainingMissable), RemainingOnline: int(row.RemainingOnline),
 			Priority: int(row.Priority), LastUnlockAt: tptr(row.LastUnlockAt),
+			HoursTotal: positive(row.CompletionistH), HoursLeft: positive(hoursLeft(row.CompletionistH, row.CompletionPct)),
 			Score: rk.Score, Factors: rk.Factors,
 		})
 	}
@@ -264,6 +270,25 @@ func (h *Handlers) getNext(w http.ResponseWriter, r *http.Request) {
 		out.Today = today
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// hoursLeft estima as horas que faltam: horas para 100% × fração que falta (0 = sem estimativa).
+func hoursLeft(total, completion float64) float64 {
+	if total <= 0 {
+		return 0
+	}
+	left := total * (1 - completion)
+	if left < 0.5 {
+		left = 0.5 // nunca "0 h" num jogo ainda não fechado
+	}
+	return math.Round(left*10) / 10
+}
+
+func positive(v float64) *float64 {
+	if v <= 0 {
+		return nil
+	}
+	return &v
 }
 
 // --- GET /timeline ------------------------------------------------------------------------------

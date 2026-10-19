@@ -14,6 +14,7 @@ import (
 	trophyhunter "github.com/RodolfoBonis/trophy-hunter-api"
 	dbgen "github.com/RodolfoBonis/trophy-hunter-api/db/gen"
 	migrations "github.com/RodolfoBonis/trophy-hunter-api/db/migrations"
+	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/hltb"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/psn"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/integrations/steam"
 	"github.com/RodolfoBonis/trophy-hunter-api/internal/platform/config"
@@ -110,6 +111,16 @@ func run() error {
 		defer wg.Done()
 		worker.Run(ctx)
 	}()
+
+	// Estimativas de tempo (HowLongToBeat) em segundo plano — melhor esforço, sem API oficial.
+	if cfg.HLTB.Enabled {
+		estimator := syncpkg.NewEstimator(queries, hltb.New(hltb.Options{BaseURL: cfg.HLTB.BaseURL, Logger: logger}), cfg.HLTB.Interval, cfg.HLTB.Batch, logger)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			estimator.Run(ctx)
+		}()
+	}
 
 	if cfg.Sync.Enabled {
 		scheduler := syncpkg.NewScheduler(syncer, rdb, queries, cfg.Sync.Interval, logger)

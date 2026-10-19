@@ -86,12 +86,16 @@ SELECT b.id, b.integration_id, b.platform, b.external_id, b.title, b.cover, b.he
        COALESCE(AVG(t.rarity_pct) FILTER (WHERE NOT t.earned), 0)::float8                      AS avg_remaining_rarity,
        COALESCE(MIN(t.rarity_pct) FILTER (WHERE NOT t.earned), 0)::float8                      AS min_remaining_rarity,
        (COUNT(t.id) FILTER (WHERE NOT t.earned AND 'missable' = ANY(t.tags)))::int             AS remaining_missable,
-       (COUNT(t.id) FILTER (WHERE NOT t.earned AND ('online' = ANY(t.tags) OR t.server_shutdown_risk)))::int AS remaining_online
+       (COUNT(t.id) FILTER (WHERE NOT t.earned AND ('online' = ANY(t.tags) OR t.server_shutdown_risk)))::int AS remaining_online,
+       -- Horas para 100% no HowLongToBeat (0 = sem estimativa).
+       COALESCE(e.completionist_h, 0)::float8                                                   AS completionist_h
 FROM best_games b
 JOIN trophies t ON t.game_id = b.id
+JOIN games g ON g.id = b.id
+LEFT JOIN game_estimates e ON e.normalized_title = g.normalized_title AND e.status = 'found'
 WHERE b.user_id = sqlc.arg(user_id)::uuid AND NOT b.abandoned AND b.has_achievements AND b.total > 0 AND b.earned > 0 AND b.earned < b.total
 GROUP BY b.id, b.integration_id, b.platform, b.external_id, b.title, b.cover, b.hero, b.priority,
-         b.total, b.earned, b.completion_pct, b.last_unlock_at, b.last_played_at;
+         b.total, b.earned, b.completion_pct, b.last_unlock_at, b.last_played_at, e.completionist_h;
 
 -- name: EasiestRemaining :many
 -- Os troféus que faltam mais "fáceis" de um jogo (maior % de jogadores que têm) — "o que fazer hoje".

@@ -77,3 +77,16 @@ func TestRankTieBreaksByRemaining(t *testing.T) {
 	assert.Equal(t, "a", got[0].ID)
 	assert.Empty(t, ranking.Rank(nil))
 }
+
+func TestTimeBonusFavorsShortRemaining(t *testing.T) {
+	base := ranking.Candidate{ID: "a", Completion: 0.5, Remaining: 10, AvgRemainingRarity: 40}
+	short, long, unknown := base, base, base
+	short.HoursLeft, long.HoursLeft = 3, 80
+	sShort, fShort := ranking.Score(short)
+	sLong, _ := ranking.Score(long)
+	sUnknown, fUnknown := ranking.Score(unknown)
+	assert.Greater(t, sShort, sLong)
+	assert.Greater(t, sLong, sUnknown, "sem estimativa não ganha bônus, mas também não perde")
+	assert.Zero(t, fUnknown.Time)
+	assert.InDelta(t, 0.10/(1+0.3), fShort.Time, 1e-9)
+}

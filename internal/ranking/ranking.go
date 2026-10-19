@@ -6,7 +6,9 @@
 //   - restantes (25%): poucos troféus faltando valem mais — 1/(1+restantes/8);
 //   - facilidade (30%): raridade média do que falta (maior % de jogadores = mais fácil);
 //   - bônus de prioridade manual (+0.05 por nível, até 3);
-//   - urgência online (+0.05) quando falta troféu online/com risco de servidor fechar.
+//   - urgência online (+0.05) quando falta troféu online/com risco de servidor fechar;
+//   - bônus de tempo (até +0.10) quando há estimativa (HowLongToBeat) de poucas horas restantes —
+//     0.10/(1+horas/10); sem estimativa, 0 (não pune quem não tem dado).
 //
 // Os fatores vão na resposta para a UI explicar a posição de cada jogo.
 package ranking
@@ -26,6 +28,8 @@ const (
 	maxPriority    = 3
 	onlineUrgency  = 0.05
 	remainingScale = 8.0
+	timeBonus      = 0.10
+	timeScaleHours = 10.0
 )
 
 // Candidate é um jogo começado e não concluído (conta mais avançada).
@@ -40,6 +44,8 @@ type Candidate struct {
 	Priority          int
 	RemainingMissable int
 	RemainingOnline   int
+	// HoursLeft é a estimativa de horas que faltam (0 = sem estimativa).
+	HoursLeft float64
 }
 
 // Factors detalha a nota (cada fator já ponderado, exceto os bônus, que são somados).
@@ -49,6 +55,7 @@ type Factors struct {
 	Ease       float64 `json:"ease"`
 	Priority   float64 `json:"priority"`
 	Urgency    float64 `json:"urgency"`
+	Time       float64 `json:"time"`
 }
 
 // Ranked é um candidato com a nota e os fatores.
@@ -79,7 +86,10 @@ func Score(c Candidate) (float64, Factors) {
 	if c.RemainingOnline > 0 {
 		f.Urgency = onlineUrgency
 	}
-	return f.Completion + f.Remaining + f.Ease + f.Priority + f.Urgency, f
+	if c.HoursLeft > 0 {
+		f.Time = timeBonus / (1 + c.HoursLeft/timeScaleHours)
+	}
+	return f.Completion + f.Remaining + f.Ease + f.Priority + f.Urgency + f.Time, f
 }
 
 // Rank ordena os candidatos pela nota (maior primeiro); empate → menos restantes → id.

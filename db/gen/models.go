@@ -112,6 +112,17 @@ type Game struct {
 	UserID              pgtype.UUID
 }
 
+type GameEstimate struct {
+	NormalizedTitle string
+	Status          string
+	HltbID          *int64
+	HltbName        *string
+	MainH           *float32
+	ExtraH          *float32
+	CompletionistH  *float32
+	FetchedAt       pgtype.Timestamptz
+}
+
 type GameProgress struct {
 	ID              pgtype.UUID
 	UserID          pgtype.UUID

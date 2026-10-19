@@ -1605,7 +1605,7 @@ components:
           type: array
           items:
             type: object
-            required: [game_id, title, platform, external_id, cover, hero, earned, total, remaining, completion_pct, avg_remaining_rarity, min_remaining_rarity, remaining_missable, remaining_online, priority, score, factors]
+            required: [game_id, title, platform, external_id, cover, hero, earned, total, remaining, completion_pct, avg_remaining_rarity, min_remaining_rarity, remaining_missable, remaining_online, priority, hours_total, hours_left, score, factors]
             properties:
               game_id: { type: string, format: uuid }
               title: { type: string }
@@ -1623,16 +1623,19 @@ components:
               remaining_online: { type: integer }
               priority: { type: integer }
               last_unlock_at: { type: [string, "null"], format: date-time }
+              hours_total: { type: [number, "null"], description: "Horas para 100% (HowLongToBeat); null = sem estimativa." }
+              hours_left: { type: [number, "null"], description: "Horas que faltam (proporcional ao progresso)." }
               score: { type: number }
               factors:
                 type: object
-                required: [completion, remaining, ease, priority, urgency]
+                required: [completion, remaining, ease, priority, urgency, time]
                 properties:
                   completion: { type: number }
                   remaining: { type: number }
                   ease: { type: number }
                   priority: { type: number }
                   urgency: { type: number }
+                  time: { type: number, description: "Bônus de poucas horas restantes (0 sem estimativa)." }
         today:
           type: [object, "null"]
           required: [game_id, trophies]
@@ -1746,7 +1749,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/Game"
         - type: object
-          required: [integration_id, account_label, progress, groups, accounts, cross_platform, unify_locked]
+          required: [integration_id, account_label, progress, groups, accounts, cross_platform, unify_locked, estimate]
           properties:
             integration_id: { type: string, format: uuid, description: "Conta desta linha do jogo." }
             account_label: { type: string }
@@ -1763,6 +1766,20 @@ components:
               description: O mesmo jogo na outra plataforma (conta mais avançada), para ver lado a lado.
               items: { $ref: "#/components/schemas/CrossPlatformGame" }
             unify_locked: { type: boolean, description: "Vínculo decidido manualmente (a unificação automática não mexe)." }
+            estimate:
+              oneOf:
+                - $ref: "#/components/schemas/GameEstimate"
+                - type: "null"
+    GameEstimate:
+      type: object
+      description: Tempos do HowLongToBeat para o título (horas). Preenchido em segundo plano.
+      required: [main_h, extra_h, completionist_h, hours_left, source_url]
+      properties:
+        main_h: { type: [number, "null"], description: História principal. }
+        extra_h: { type: [number, "null"], description: História + extras. }
+        completionist_h: { type: [number, "null"], description: "100% (platina)." }
+        hours_left: { type: [number, "null"], description: "Quanto falta para 100% (proporcional ao progresso)." }
+        source_url: { type: string }
     LinkGameRequest:
       type: object
       required: [other_game_id]

@@ -40,6 +40,7 @@ type Config struct {
 	PSN               PSN
 	AI                AI
 	Push              Push
+	HLTB              HLTB
 	WorkerConcurrency int `env:"WORKER_CONCURRENCY" envDefault:"4"`
 }
 
@@ -154,6 +155,14 @@ type Steam struct {
 	ServerAPIKey string  `env:"STEAM_SERVER_API_KEY"`
 	Lang         string  `env:"STEAM_LANG" envDefault:"brazilian"`
 	RPS          float64 `env:"STEAM_RPS" envDefault:"4"`
+}
+
+// HLTB configura as estimativas de tempo (HowLongToBeat), preenchidas pelo worker em segundo plano.
+type HLTB struct {
+	Enabled  bool          `env:"HLTB_ENABLED" envDefault:"true"`
+	BaseURL  string        `env:"HLTB_BASE_URL" envDefault:"https://howlongtobeat.com"`
+	Interval time.Duration `env:"HLTB_INTERVAL" envDefault:"10m"`
+	Batch    int           `env:"HLTB_BATCH" envDefault:"15"`
 }
 
 // Option ajusta o carregamento.

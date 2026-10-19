@@ -271,6 +271,17 @@ type gameDetailDTO struct {
 	// pelo usuário (a unificação automática não mexe).
 	CrossPlatform []crossPlatformDTO `json:"cross_platform"`
 	UnifyLocked   bool               `json:"unify_locked"`
+	// Estimate: tempos do HowLongToBeat para este título (null = ainda sem estimativa).
+	Estimate *estimateDTO `json:"estimate"`
+}
+
+// estimateDTO ↔ components.schemas.GameEstimate (horas; null = o HLTB não tem esse dado).
+type estimateDTO struct {
+	MainH          *float64 `json:"main_h"`
+	ExtraH         *float64 `json:"extra_h"`
+	CompletionistH *float64 `json:"completionist_h"`
+	HoursLeft      *float64 `json:"hours_left"`
+	SourceURL      string   `json:"source_url"`
 }
 
 // crossPlatformDTO ↔ components.schemas.CrossPlatformGame: a versão do jogo em outra plataforma

@@ -154,6 +154,15 @@ assinatura → o job é reagendado com backoff. Para rodar local: `CLAUDE_CODE_O
 - **Steam**: sem API key, a conta usa a de outra conta da mesma pessoa ou `STEAM_SERVER_API_KEY`.
 
 
+## Tempo para platinar (HowLongToBeat)
+
+O worker preenche `game_estimates` aos poucos (lote de `HLTB_BATCH` títulos a cada `HLTB_INTERVAL`,
+1 req/2 s). O HLTB **não tem API oficial**: o cliente (`internal/integrations/hltb`) segue o site —
+token em `{rota}/init`, busca com `x-auth-token`, redescobre a rota no bundle JS se ela mudar (404) e
+para no 429. Só aceita título normalizado igual (sem estimativa > estimativa de outro jogo). Usado na
+página do jogo (`estimate`), na Próxima Platina (`hours_left` + fator `time` no ranking). Desligar:
+`HLTB_ENABLED=false`.
+
 ## Social (opt-in)
 
 Entre membros: perfil do amigo (`/social/friends/{id}` + biblioteca só leitura), "amigos neste jogo"
